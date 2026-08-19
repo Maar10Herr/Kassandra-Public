@@ -1,0 +1,40 @@
+# Kassandra default configuration
+# Secrets are NEVER stored here — use environment variables
+
+paths:
+  project_root: "."
+
+rates:
+  companies_house:
+    requests_per_second: 1.0
+    max_per_day: 500
+
+evidence:
+  hash_algorithm: sha256
+  compression: true
+  max_content_length_bytes: 10485760  # 10 MB
+
+registry:
+  primary_source: companies_house
+  fallback_jurisdictions: []
+
+scoring:
+  schema_version: 1
+  weights:
+    insolvency_event: 10.0
+    going_concern_warning: 8.0
+    payment_stress: 6.0
+    management_departure: 3.0
+    layoffs: 4.0
+    facility_closure: 5.0
+    contract_loss: 5.0
+    regulatory_action: 7.0
+
+portfolio:
+  euro_stoxx_50:
+    source_url: "https://en.wikipedia.org/wiki/EURO_STOXX_50"
+    refresh_interval_hours: 168  # weekly
+
+logging:
+  level: INFO
+  format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
