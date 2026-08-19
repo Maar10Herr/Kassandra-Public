@@ -1,66 +1,39 @@
 # Kassandra
 
-Rule-based corporate early-warning and dependency intelligence for analyst-led
-research.
+[![CI](https://github.com/Maar10Herr/Kassandra-Public/actions/workflows/ci.yml/badge.svg)](https://github.com/Maar10Herr/Kassandra-Public/actions/workflows/ci.yml)
+[![License: GPL v3+](https://img.shields.io/badge/License-GPL_v3%2B-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](pyproject.toml)
+[![ORCID](https://img.shields.io/badge/ORCID-0009--0005--8721--6588-A6CE39.svg)](https://orcid.org/0009-0005-8721-6588)
 
-> **Software status**
->
-> Experimental research implementation. Kassandra is not a validated credit
-> model, credit-rating system, trading signal, or production decision engine.
-> This repository supplies no estimate of precision, recall, lead time, or
-> financial performance. Every alert requires human review of the underlying
-> evidence and entity match.
+Provenance-aware corporate monitoring that turns public records into auditable
+events, dependency paths, and analyst review queues.
 
-Kassandra collects public corporate records and public-web material, preserves
-source provenance, applies deterministic event classifiers, constructs a typed
-entity graph, and produces two deliberately separate rankings:
+> [!CAUTION]
+> **Experimental analyst-support software.** Kassandra is an evidence triage
+> system, not a validated credit model, rating system, trading signal, or
+> autonomous decision engine. Entity matches, event classifications, and graph
+> transmissions require review against the underlying source material.
 
-- `active_watch_priority` is gated by adverse evidence and is zero without an
-  active direct or eligible transmitted signal;
-- `coverage_monitor_priority` describes information and graph-coverage gaps,
-  not credit deterioration.
+**[Install and run](#quick-start)** ·
+**[Review the data model](docs/data_dictionary.md)** ·
+**[Download the latest release](https://github.com/Maar10Herr/Kassandra-Public/releases/latest)**
 
-The distinction prevents graph density or missing data from being presented as
-credit risk.
+## What Kassandra does
 
-## Architecture
+Kassandra collects public corporate material, preserves source provenance,
+classifies evidence with deterministic rules, resolves legal entities, and
+constructs a typed dependency graph. It produces two separate operational
+queues:
 
-```text
-public sources -> evidence store -> deterministic classifier -> events
-                      |                                      |
-                      v                                      v
-              provenance and hashes              entity/dependency graph
-                                                             |
-                                                             v
-                                  watch priority + coverage monitoring
-                                                             |
-                                                             v
-                                           CLI, dashboard, Markdown digest
-```
+| Output | Meaning | Activation rule |
+|---|---|---|
+| `active_watch_priority` | Adverse-evidence review priority | Requires a current direct signal or an eligible transmitted signal |
+| `coverage_monitor_priority` | Source, entity, and graph-coverage work | Reflects gaps and staleness; does not represent deterioration |
 
-The implementation uses a local SQLite database and content-addressed evidence
-store. Neither is included in this repository. Source adapters cover Companies
-House, the UK Gazette, GLEIF, BODACC, BORME, E-PRTR, TED, selected public web
-pages and feeds, and an environment-dependent Handelsregister adapter. Access,
-coverage, rate limits, robots policies, and terms remain source- and
-jurisdiction-specific; inclusion of an adapter does not imply endorsement or
-guaranteed availability.
+This separation is enforced in the scoring layer: graph density and incomplete
+coverage cannot create an adverse-watch score by themselves.
 
-## What is included
-
-- Python 3.11+ package and `kassandra` command-line interface
-- deterministic evidence classification and provenance records
-- legal-entity resolution and typed relationship graph construction
-- gated scoring with reason codes and component-level audit fields
-- local dashboard, scheduled-cycle, and alert-formatting paths
-- schema migrations and synthetic/in-memory tests
-- a fail-closed point-in-time evaluation contract
-- a synthetic scoring-cost benchmark
-
-Runtime databases, collected evidence, portfolios, environment files, logs,
-backups, schedules, and operator state are excluded by design.
-
-## Installation
+## Quick start
 
 Using [`uv`](https://docs.astral.sh/uv/):
 
@@ -69,27 +42,16 @@ uv sync --extra dev
 uv run kassandra --help
 ```
 
-Or with a Python virtual environment:
+Or with a standard virtual environment:
 
 ```sh
-python -m venv .venv
+python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -e '.[dev]'
+python3 -m pip install -e '.[dev]'
 kassandra --help
 ```
 
-Create a project-local `.env` only when a source requires credentials. For
-example:
-
-```text
-COMPANIES_HOUSE_API_KEY=replace_with_your_own_key
-```
-
-Never commit `.env`, a database, or collected evidence. The application does
-not contain embedded service credentials and does not load credentials from
-user- or machine-wide configuration directories.
-
-## Minimal local workflow
+Initialize a disposable local workspace and run one analyst cycle:
 
 ```sh
 uv run kassandra init
@@ -101,51 +63,102 @@ uv run kassandra score
 uv run kassandra dashboard --port 8765
 ```
 
-Collection performs network requests to the configured public sources. Start
-with a disposable local database, review source-specific documentation, and
-respect applicable access conditions. Use `kassandra evidence-show ID` to
-inspect the provenance behind an event before treating it as analyst input.
+`collect` makes network requests to configured public sources. Review the
+source inventory and applicable access conditions before enabling an adapter.
+Use `kassandra evidence-show ID` to inspect a record's provenance before acting
+on an alert.
 
-## Evaluation boundary
+## System design
 
-The five distressed-company cases in `src/kassandra/benchmark.py` are curated,
-positive-only regression material. They were assembled and used during pattern
-development; they are not an independent historical cohort and provide no
-false-positive denominator.
+```mermaid
+flowchart LR
+    S[Public registries, gazettes, and web sources] --> E[Evidence store]
+    E --> C[Deterministic classifiers]
+    E --> P[Hashes and provenance]
+    C --> V[Versioned events]
+    V --> G[Typed entity and dependency graph]
+    G --> W[Active watch queue]
+    G --> M[Coverage monitor]
+    W --> U[CLI, dashboard, and Markdown digest]
+    M --> U
+```
 
-[`docs/backtest_methodology.md`](docs/backtest_methodology.md) defines a
-fail-closed point-in-time contract for future evaluation. It requires matched
-distressed and non-distressed cases, dated documents, frozen model/configuration
-identifiers, and a complete corpus hash. If those inputs are missing, the
-runner emits no performance metrics.
+The implementation uses SQLite for local state and a content-addressed evidence
+store for retrieved material. Each event retains its source URL, observation
+time, content identity, classifier version, and reason codes. The graph records
+relationship type and quality so transmitted signals remain traceable to both
+an event and a path.
 
-Accordingly, this release makes no claim that Kassandra predicts defaults,
-improves lead time, establishes causal transmission, or outperforms direct-only
-monitoring.
+## Scoring contract
 
-## Scoring semantics
-
-The current scoring layer is explainable triage, not probability estimation.
+The current scoring layer is explainable triage rather than probability
+estimation:
 
 ```text
 active_watch_priority
-    = adverse_signal x credibility x materiality x recency
+    = adverse_signal × credibility × materiality × recency
 
 coverage_monitor_priority
-    = graph coverage + information gap + source staleness
+    = graph_coverage + information_gap + source_staleness
 ```
 
-Only eligible evidence and relationship tiers enter watch transmission. Unknown
-materiality remains explicit; it is not silently converted into certainty.
-Inspect the reason codes and evidence record rather than relying on the scalar
-score alone.
+Only eligible evidence and relationship tiers enter watch transmission.
+Unknown materiality remains explicit. Every scored record carries component
+values and reason codes for review.
 
-## Documentation
+## Evaluation discipline
 
-- [`docs/data_dictionary.md`](docs/data_dictionary.md) — schema and event taxonomy
-- [`docs/source_inventory.md`](docs/source_inventory.md) — source roles and scheduling contract
-- [`docs/country_registry_matrix.md`](docs/country_registry_matrix.md) — dated jurisdiction/access survey
-- [`docs/backtest_methodology.md`](docs/backtest_methodology.md) — validation contract and claim limits
+The curated distressed-company cases in `src/kassandra/benchmark.py` are
+positive regression material used during rule development. They are useful for
+detecting implementation regressions but do not supply a false-positive
+denominator or an independent estimate of predictive performance.
+
+[`docs/backtest_methodology.md`](docs/backtest_methodology.md) defines the
+point-in-time evaluation contract for future claims. It requires:
+
+- matched distressed and non-distressed cases;
+- dated source documents and frozen collection cutoffs;
+- frozen configuration, classifier, and graph identifiers; and
+- a complete corpus manifest and hash.
+
+The evaluator fails closed when those inputs are incomplete. Performance
+metrics therefore enter a release only when the underlying cohort and evidence
+can be audited.
+
+## Sources and provenance
+
+Adapters cover Companies House, the UK Gazette, GLEIF, BODACC, BORME, E-PRTR,
+TED, selected public web pages and feeds, and an environment-dependent German
+commercial-register path. Coverage and permitted access vary by source and
+jurisdiction.
+
+- [`docs/source_inventory.md`](docs/source_inventory.md) records each adapter's
+  purpose, authoritative URL, access mode, and scheduling contract.
+- [`docs/country_registry_matrix.md`](docs/country_registry_matrix.md) is a
+  dated jurisdiction and availability survey.
+- [`docs/data_dictionary.md`](docs/data_dictionary.md) defines provenance,
+  entity, event, and score fields.
+
+Primary services retain ownership of their records and impose their own terms.
+Kassandra stores local research evidence; it does not publish a compiled source
+dataset.
+
+## Configuration and data security
+
+Source credentials belong in a project-local `.env`, for example:
+
+```text
+COMPANIES_HOUSE_API_KEY=replace_with_your_own_key
+```
+
+The application reads explicit project configuration only. Keep `.env`,
+SQLite files, evidence objects, portfolios, logs, schedules, and backups out of
+version control. Use least-privilege credentials and place the dashboard behind
+access controls appropriate to the environment.
+
+This release has not received an external security audit. Treat collected
+documents and analyst portfolios according to their confidentiality and
+retention requirements.
 
 ## Verification
 
@@ -155,55 +168,37 @@ uv run pytest -q
 uv run python -m compileall -q src tests
 ```
 
-The portable cost benchmark uses synthetic rows and does not measure model
-quality:
+The synthetic scoring-cost benchmark exercises scaling without making a model
+quality claim:
 
 ```sh
 uv run python scripts/benchmark_scoring_scale.py \
   --sizes 50 500 3000 --repeats 3
 ```
 
-GitHub Actions runs the test suite and a syntax check on Python 3.11 and 3.13.
-Network collectors are intentionally not exercised against live services in CI.
+GitHub Actions runs the test suite and syntax checks on Python 3.11 and 3.13.
+Collectors are tested through deterministic fixtures rather than live services.
 
-## Security and data handling
-
-Kassandra processes potentially sensitive analyst portfolios and collected
-documents when operated locally. This public repository contains no such data.
-Operators should:
-
-- use a dedicated environment and least-privilege source credentials;
-- keep `.env`, `data/`, SQLite files, evidence objects, and backups outside
-  version control;
-- review source URLs and content before distributing an alert;
-- treat entity resolution and event classification as fallible;
-- deploy the dashboard only behind controls appropriate to their environment.
-
-The implementation has not received an external security audit.
-
-## Repository layout
+## Repository map
 
 ```text
 src/kassandra/       package, CLI, collectors, graph, scoring, dashboard
 state/migrations/    schema-only SQLite migrations
-tests/               synthetic and in-memory regression/contract tests
-docs/                public schema, source, and evaluation documentation
+tests/               synthetic and in-memory regression and contract tests
+docs/                data model, source registry, and evaluation methodology
 scripts/             synthetic scoring-cost benchmark
 config/              non-secret defaults
 ```
 
-## Citation and attribution
+## Citation
 
-Kassandra integrates public information from independent registries, gazettes,
-reference-data services, procurement systems, and company websites. Those
-sources retain their own ownership and terms; this repository neither republishes
-a collected dataset nor claims authorship of source records. See the source
-inventory for the role assigned to each adapter.
-
-If you use the software in research, cite the versioned GitHub release using
-[`CITATION.cff`](CITATION.cff).
+Release metadata is in [`CITATION.cff`](CITATION.cff). Author:
+[Maarten Linus Herrmann](https://orcid.org/0009-0005-8721-6588), ORCID
+[`0009-0005-8721-6588`](https://orcid.org/0009-0005-8721-6588).
 
 ## License
 
-The Kassandra source in this repository is released under the [MIT License](LICENSE).
-Third-party dependencies remain subject to their respective licenses.
+Kassandra is licensed under [GPL-3.0-or-later](LICENSE), so distributed
+modifications to the monitoring engine remain available under the same
+reciprocal terms. Third-party libraries and public information services retain
+their respective licenses and terms.
