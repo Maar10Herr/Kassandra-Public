@@ -455,8 +455,7 @@ MIGRATIONS: dict[int, str] = {
     WHEN NEW.run_id IS NOT NULL
     BEGIN
         SELECT RAISE(ABORT,
-            'Scoring provenance integrity violation: run_id ''' ||
-            NEW.run_id || ''' has no matching scoring_runs row')
+            'Scoring provenance integrity violation: run_id has no matching scoring_runs row')
         WHERE (SELECT COUNT(*) FROM scoring_runs WHERE run_id = NEW.run_id) = 0;
     END;
 
@@ -465,8 +464,7 @@ MIGRATIONS: dict[int, str] = {
     WHEN NEW.run_id IS NOT NULL
     BEGIN
         SELECT RAISE(ABORT,
-            'Scoring provenance integrity violation: run_id ''' ||
-            NEW.run_id || ''' has no matching scoring_runs row')
+            'Scoring provenance integrity violation: run_id has no matching scoring_runs row')
         WHERE (SELECT COUNT(*) FROM scoring_runs WHERE run_id = NEW.run_id) = 0;
     END;
     """,
@@ -1133,8 +1131,7 @@ def _reconcile_runtime_schema(conn: sqlite3.Connection) -> None:
         WHEN NEW.run_id IS NOT NULL
         BEGIN
             SELECT RAISE(ABORT,
-                'Scoring provenance integrity violation: run_id ''' ||
-                NEW.run_id || ''' has no matching scoring_runs row')
+                'Scoring provenance integrity violation: run_id has no matching scoring_runs row')
             WHERE (SELECT COUNT(*) FROM scoring_runs WHERE run_id = NEW.run_id) = 0;
         END;
 
@@ -1144,8 +1141,7 @@ def _reconcile_runtime_schema(conn: sqlite3.Connection) -> None:
         WHEN NEW.run_id IS NOT NULL
         BEGIN
             SELECT RAISE(ABORT,
-                'Scoring provenance integrity violation: run_id ''' ||
-                NEW.run_id || ''' has no matching scoring_runs row')
+                'Scoring provenance integrity violation: run_id has no matching scoring_runs row')
             WHERE (SELECT COUNT(*) FROM scoring_runs WHERE run_id = NEW.run_id) = 0;
         END;
     """)

@@ -207,7 +207,7 @@ def test_carbon_neutral_filtered():
 # ── Entity name extraction tests ─────────────────────────────────────────────
 
 def test_entity_name_captured():
-    """When a named entity is in a capture group, entity_name should be populated.
+    r"""When a named entity is in a capture group, entity_name should be populated.
 
     Note: regex capture groups are greedy. 'TSMC is our largest customer' may
     capture as 'TSMC is our largest' because the character class [A-Za-z\s&.,]
