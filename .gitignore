@@ -1,0 +1,77 @@
+# Kassandra
+# Corporate early-warning and dependency-intelligence system
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+*.egg
+
+# Environment / secrets
+.env
+*.env.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# DuckDB
+*.duckdb
+*.duckdb.wal
+
+# Parquet
+data/*.parquet
+
+# Evidence (content-addressed, committed separately)
+data/evidence/objects/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# State (runtime, not committed except journal)
+state/current.json
+state/daemon.json
+state/soak.json
+
+# Backups (operational)
+backups/
+
+# Temporary
+tmp/
+*.tmp
+data/annual_reports/
+data/eprtr/
+data/ted/
+
+# Publication boundary: runtime, collected, and operator-private artifacts stay local
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite*
+*.duckdb
+*.duckdb.*
+*.parquet
+state/*.json
+state/*.jsonl
+logs/
+backups/
+*.log

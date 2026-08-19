@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use Kassandra in research, cite the versioned software release."
+title: "Kassandra: Corporate Early-Warning and Dependency Intelligence"
+type: software
+version: 0.1.0
+date-released: 2026-08-19
+authors:
+  - family-names: Herrmann
+    given-names: Maarten Linus
+    orcid: "https://orcid.org/0009-0005-8721-6588"
+repository-code: "https://github.com/Maar10Herr/Kassandra-Public"
+license: MIT
+abstract: >-
+  Experimental rule-based software for provenance-aware public evidence
+  collection, entity/dependency graphs, and analyst-led corporate monitoring.
+keywords:
+  - credit monitoring
+  - entity resolution
+  - provenance
+  - corporate registries
+  - early warning
