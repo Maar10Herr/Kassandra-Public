@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   analyze:
+    if: github.event.repository.visibility == 'public'
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     permissions:

@@ -1,7 +1,7 @@
 """Content-based event classification.
 
 Extracts material events from web page content and feed entries using
-keyword and pattern matching. No LLM calls — transparent, auditable rules.
+deterministic keyword and pattern matching with auditable matched evidence.
 
 Per kassandra_goals.md §12 event taxonomy.
 Per engineering audit: must classify FULL text, not just excerpts.

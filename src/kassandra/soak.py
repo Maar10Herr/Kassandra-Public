@@ -1563,7 +1563,7 @@ def run_soak_cycle() -> dict[str, Any]:
         # Step 1b: Web monitoring (supervised singleton)
         cycle_result["steps"]["collect"]["web_monitor"] = _dispatch_web_monitor(db=db)
 
-        # Step 2: GLEIF staleness check + refresh (persisted data — no LLM needed)
+        # Step 2: GLEIF staleness check and persisted-data refresh
         gleif_state = _get_gleif_staleness(db)
         if gleif_state.get("overdue"):
             from kassandra.graph_enrich import enrich_placeholders
