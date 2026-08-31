@@ -9,10 +9,11 @@ Provenance-aware corporate monitoring that turns public records into auditable
 events, dependency paths, and analyst review queues.
 
 > [!CAUTION]
-> **Experimental analyst-support software.** Kassandra is an evidence triage
-> system, not a validated credit model, rating system, trading signal, or
-> autonomous decision engine. Entity matches, event classifications, and graph
-> transmissions require review against the underlying source material.
+> **Experimental analyst-support software.** Kassandra supports evidence triage
+> for analyst review. Credit-model, rating, trading-signal, and autonomous-
+> decision use are outside its validated scope. Entity matches, event
+> classifications, and graph transmissions require review against the
+> underlying source material.
 
 **[Install and run](#quick-start)** ·
 **[Review the data model](docs/data_dictionary.md)** ·
@@ -28,10 +29,10 @@ queues:
 | Output | Meaning | Activation rule |
 |---|---|---|
 | `active_watch_priority` | Adverse-evidence review priority | Requires a current direct signal or an eligible transmitted signal |
-| `coverage_monitor_priority` | Source, entity, and graph-coverage work | Reflects gaps and staleness; does not represent deterioration |
+| `coverage_monitor_priority` | Source, entity, and graph-coverage work | Tracks gaps and staleness; separate from deterioration signals |
 
-This separation is enforced in the scoring layer: graph density and incomplete
-coverage cannot create an adverse-watch score by themselves.
+The scoring layer keeps graph density and incomplete coverage out of
+adverse-watch scores.
 
 ## Quick start
 
@@ -95,8 +96,8 @@ an event and a path.
 
 ## Scoring contract
 
-The current scoring layer is explainable triage rather than probability
-estimation:
+The current scoring layer provides explainable triage; probability estimation is
+outside its scope:
 
 ```text
 active_watch_priority
@@ -112,22 +113,21 @@ values and reason codes for review.
 
 ## Evaluation discipline
 
-The curated distressed-company cases in `src/kassandra/benchmark.py` are
-positive regression material used during rule development. They are useful for
-detecting implementation regressions but do not supply a false-positive
-denominator or an independent estimate of predictive performance.
+The five curated distressed-company cases in `src/kassandra/benchmark.py` are
+positive regression cases used during rule development. They help detect
+implementation regressions. With no matched controls or independent corpus,
+they cannot estimate predictive performance.
 
 [`docs/backtest_methodology.md`](docs/backtest_methodology.md) defines the
-point-in-time evaluation contract for future claims. It requires:
+requirements for any future performance result. It requires:
 
 - matched distressed and non-distressed cases;
 - dated source documents and frozen collection cutoffs;
 - frozen configuration, classifier, and graph identifiers; and
 - a complete corpus manifest and hash.
 
-The evaluator fails closed when those inputs are incomplete. Performance
-metrics therefore enter a release only when the underlying cohort and evidence
-can be audited.
+The evaluator fails closed when inputs are incomplete. Report metrics only after
+the cohort and evidence have been audited.
 
 ## Sources and provenance
 
@@ -144,8 +144,8 @@ jurisdiction.
   entity, event, and score fields.
 
 Primary services retain ownership of their records and impose their own terms.
-Kassandra stores local research evidence; it does not publish a compiled source
-dataset.
+Kassandra stores research evidence locally; compiled source datasets are not
+distributed.
 
 ## Configuration and data security
 
@@ -164,10 +164,9 @@ and redirect is checked against non-public address ranges, standard HTTPX
 connections are pinned to approved addresses, and every body is size-bounded.
 Custom transports still require network-level egress controls.
 
-This release has not received an external security audit. Treat collected
-documents and analyst portfolios according to their confidentiality and
-retention requirements. See [`SECURITY.md`](SECURITY.md) for reporting and
-deployment boundaries.
+Treat collected documents and analyst portfolios according to their
+confidentiality and retention requirements. See [`SECURITY.md`](SECURITY.md) for
+security status, reporting, and deployment boundaries.
 
 ## Verification
 
@@ -179,8 +178,8 @@ uv run pytest -q
 uv run python -m compileall -q src tests
 ```
 
-The synthetic scoring-cost benchmark exercises scaling without making a model
-quality claim:
+The synthetic scoring-cost benchmark measures runtime scaling only; it says
+nothing about model quality:
 
 ```sh
 uv run python scripts/benchmark_scoring_scale.py \
@@ -188,7 +187,7 @@ uv run python scripts/benchmark_scoring_scale.py \
 ```
 
 GitHub Actions runs the test suite and syntax checks on Python 3.11 and 3.13.
-Collectors are tested through deterministic fixtures rather than live services.
+Collectors use deterministic fixtures in tests; CI does not call live services.
 
 ## Repository map
 

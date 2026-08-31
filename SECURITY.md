@@ -1,7 +1,8 @@
 # Security policy
 
-Kassandra is experimental research software for trusted analysts. It has not
-received an independent security audit and is not a production risk engine.
+Kassandra is experimental research software for trusted analysts. No
+independent security audit has been performed; production risk-engine use is
+outside its scope.
 
 ## Reporting
 

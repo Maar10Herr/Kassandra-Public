@@ -1,8 +1,46 @@
+import importlib.util
 import sqlite3
+import sys
+from pathlib import Path
 
 import pytest
 
 from kassandra.db import SCHEMA_VERSION, migrate
+
+
+def _private_release_exporter():
+    exporter_path = Path(__file__).parents[1] / "scripts" / "public_release.py"
+    if not exporter_path.exists():
+        pytest.skip("private-only public release exporter")
+    spec = importlib.util.spec_from_file_location("public_release", exporter_path)
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"cannot load release exporter: {exporter_path}")
+    exporter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(exporter)
+    return exporter
+
+
+def test_release_check_ignores_root_local_venv_symlink(tmp_path):
+    exporter = _private_release_exporter()
+    target = tmp_path / "public"
+    exporter.build(target)
+    python_link = target / ".venv" / "bin" / "python3"
+    python_link.parent.mkdir(parents=True)
+    python_link.symlink_to(sys.executable)
+
+    exporter.check(target)
+
+
+def test_release_check_rejects_symlink_under_allowlisted_tree(tmp_path):
+    exporter = _private_release_exporter()
+    target = tmp_path / "public"
+    exporter.build(target)
+    release_link = target / "src" / ".venv" / "python3"
+    release_link.parent.mkdir(parents=True)
+    release_link.symlink_to(sys.executable)
+
+    with pytest.raises(SystemExit, match="symlink"):
+        exporter.check(target)
 
 
 def _db():
