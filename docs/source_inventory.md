@@ -1,9 +1,8 @@
 # Source Inventory
 
-Release snapshot: August 2026. “Active” means an adapter exists in this
-release; it does not guarantee current availability, completeness, or
-permission for a particular deployment. Verify source terms and access before
-use.
+Development snapshot: August 2026. “Active” means an adapter exists in this
+release. Availability, completeness, and permission depend on deployment;
+verify source terms and access before use.
 
 | Source | Type | Status | Coverage | Unique Evidence | Notes |
 |--------|------|--------|----------|-----------------|-------|
@@ -17,27 +16,26 @@ use.
 
 ## Scheduling contract
 
-The scheduled source set is intentional and is the only set whose freshness is
-required for a green soak/report:
+The scheduled source set is intentional and defines freshness requirements for
+a green soak/report:
 
 - **Scheduled by daily soak:** `companies_house`, `uk_gazette`, `web_monitor`.
   The real-time daemon additionally polls `bodacc_fr` and `borme_es` every 15
   minutes together with Companies House and the Gazette. Every scheduled source
   must have a recent completed `source_runs` row with `status=success`; missing,
   failed, or older-than-26-hour runs make the cycle degraded.
-- **Manual-only (not a freshness failure when absent):** `handelsregister_de`.
+- **Manual-only:** `handelsregister_de`. Its absence does not fail freshness.
   This adapter is available for explicit collection and is environment-dependent
   because the site blocks non-EU IPs.
 
-This distinction prevents an absent schedule from being reported as healthy based
-only on historical evidence, while avoiding false failures for intentionally
-manual sources.
+This distinction keeps an absent schedule from being reported healthy based on
+historical evidence and avoids failures for intentionally manual sources.
 
 
 Each source is evaluated on:
 - **Coverage**: Which entities/jurisdictions does it cover?
 - **Timeliness**: How quickly does it surface new information?
-- **Unique evidence**: Does it provide signals not available elsewhere?
+- **Unique evidence**: Signals unavailable elsewhere.
 - **Reliability**: False positive rate, data quality
 - **Cost**: Network requests, storage, parsing complexity
 - **Incremental chronological value**: Does it improve lead time or precision?

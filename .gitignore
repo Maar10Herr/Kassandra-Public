@@ -74,4 +74,13 @@ state/*.json
 state/*.jsonl
 logs/
 backups/
+review_packages/
+.hermes/
+memory.md
 *.log
+
+# Local agent context
+AGENTS.md
+HERMES.md
+CLAUDE.md
+.cursorrules
