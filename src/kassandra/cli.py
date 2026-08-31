@@ -2,6 +2,7 @@
 
 import logging
 import sys
+from datetime import UTC
 from pathlib import Path
 
 import click
@@ -9,12 +10,12 @@ import click
 from kassandra import __version__
 from kassandra.db import get_db, migrate
 from kassandra.extract_edge_metrics import (
+    extract_economic_materiality,
     extract_edge_metrics,
     extract_operational_criticality,
-    extract_economic_materiality,
+    show_economic_materiality,
     show_edge_metrics,
     show_operational_criticality,
-    show_economic_materiality,
 )
 
 
@@ -79,7 +80,9 @@ def collect() -> None:
     results = run_collection(db)
     db.close()
     total = sum(m.new_evidence for m in results.values())
-    click.echo(f"Collected {total} new evidence items ({ {k: v.to_dict() for k, v in results.items()} })")
+    click.echo(
+        f"Collected {total} new evidence items ({ {k: v.to_dict() for k, v in results.items()} })"
+    )
 
 
 @cli.command()
@@ -128,10 +131,12 @@ def score() -> None:
 @click.option("--port", "-p", default=8765, help="Port to listen on")
 def dashboard(port: int) -> None:
     """Start the local investigation dashboard."""
+    import os
+
     from kassandra.dashboard import run_dashboard
 
-    click.echo(f"Starting dashboard on http://localhost:{port}")
-    run_dashboard(port=port)
+    click.echo("Starting authenticated dashboard on loopback; use the one-time URL in logs.")
+    run_dashboard(port=port, token=os.environ.get("KASSANDRA_DASHBOARD_TOKEN"))
 
 
 @cli.command()
@@ -144,7 +149,7 @@ def pilot(report: bool) -> None:
     uncertainty quantification. Validates whether the product thesis
     (economically meaningful dependency extraction) is feasible.
     """
-    from kassandra.pilot import define_pilot_edges, ingest_pilot_edges, generate_validation_report
+    from kassandra.pilot import define_pilot_edges, generate_validation_report, ingest_pilot_edges
 
     db = get_db()
     migrate(db)
@@ -163,7 +168,9 @@ def pilot(report: bool) -> None:
 
 @cli.command()
 @click.option("--isin", "-i", help="ISIN of a single company to analyze")
-@click.option("--all", "all_companies", is_flag=True, help="Analyze all companies with known annual reports")
+@click.option(
+    "--all", "all_companies", is_flag=True, help="Analyze all companies with known annual reports"
+)
 def discover_dependencies(isin: str | None, all_companies: bool) -> None:
     """Automated economic dependency discovery from annual reports.
 
@@ -201,12 +208,14 @@ def discover_dependencies(isin: str | None, all_companies: bool) -> None:
         success = 0
         total_deps = 0
         for i, row in enumerate(rows):
-            click.echo(f"\n[{i+1}/{total}] {row['canonical_name']}")
+            click.echo(f"\n[{i + 1}/{total}] {row['canonical_name']}")
             counts = discover_economic_dependencies(db, row["id"], data_dir)
             if counts.get("stored", 0) > 0:
                 success += 1
                 total_deps += counts["stored"]
-        click.echo(f"\nDone: {success}/{total} companies with new dependencies, {total_deps} total edges")
+        click.echo(
+            f"\nDone: {success}/{total} companies with new dependencies, {total_deps} total edges"
+        )
     else:
         click.echo("Use --isin <ISIN> for a single company or --all for batch analysis")
 
@@ -257,8 +266,6 @@ def verify_state() -> None:
 
     state = json.loads(state_path.read_text())
     stats = state.get("stats", {})
-    query_basis = state.get("query_basis", {})
-
     failures = 0
     passes = 0
 
@@ -344,7 +351,9 @@ def extract_edge_metrics_cmd(dry_run: bool, show_only: bool) -> None:
         if not results:
             click.echo("No annual_report edges found")
         else:
-            click.echo(f"{'Type':<30s} {'Total':>6s} {'HasConc':>8s} {'HasRep':>8s} {'AvgConc':>8s} {'AvgRep':>8s}")
+            click.echo(
+                f"{'Type':<30s} {'Total':>6s} {'HasConc':>8s} {'HasRep':>8s} {'AvgConc':>8s} {'AvgRep':>8s}"
+            )
             click.echo("-" * 70)
             for r in results:
                 click.echo(
@@ -380,7 +389,9 @@ def extract_edge_metrics_cmd(dry_run: bool, show_only: bool) -> None:
 
 @cli.command(name="extract-criticality")
 @click.option("--dry-run", is_flag=True, help="Show what would be updated without changing data")
-@click.option("--show", "show_only", is_flag=True, help="Show current criticality metrics without extracting")
+@click.option(
+    "--show", "show_only", is_flag=True, help="Show current criticality metrics without extracting"
+)
 def extract_criticality_cmd(dry_run: bool, show_only: bool) -> None:
     """Extract operational criticality ratings from annual report evidence.
 
@@ -399,7 +410,9 @@ def extract_criticality_cmd(dry_run: bool, show_only: bool) -> None:
         if not results:
             click.echo("No annual_report edges found")
         else:
-            click.echo(f"{'Type':<30s} {'Total':>6s} {'HasCrit':>8s} {'AvgCrit':>8s} {'MinCrit':>8s} {'MaxCrit':>8s}")
+            click.echo(
+                f"{'Type':<30s} {'Total':>6s} {'HasCrit':>8s} {'AvgCrit':>8s} {'MinCrit':>8s} {'MaxCrit':>8s}"
+            )
             click.echo("-" * 70)
             for r in results:
                 click.echo(
@@ -436,7 +449,9 @@ def extract_criticality_cmd(dry_run: bool, show_only: bool) -> None:
 
 @cli.command(name="extract-materiality")
 @click.option("--dry-run", is_flag=True, help="Show what would be updated without changing data")
-@click.option("--show", "show_only", is_flag=True, help="Show current materiality metrics without extracting")
+@click.option(
+    "--show", "show_only", is_flag=True, help="Show current materiality metrics without extracting"
+)
 def extract_materiality_cmd(dry_run: bool, show_only: bool) -> None:
     """Extract disclosed economic materiality figures from annual report evidence.
 
@@ -499,20 +514,27 @@ def extract_materiality_cmd(dry_run: bool, show_only: bool) -> None:
 
 
 @cli.command()
-@click.option("--digest-only", is_flag=True, help="Generate digest from last metrics without collecting/scoring")
-@click.option("--check-only", is_flag=True, help="Only run consistency checks, don't collect or score")
+@click.option(
+    "--digest-only",
+    is_flag=True,
+    help="Generate digest from last metrics without collecting/scoring",
+)
+@click.option(
+    "--check-only", is_flag=True, help="Only run consistency checks, don't collect or score"
+)
 def soak_cycle(digest_only: bool, check_only: bool) -> None:
     """Run one complete soak cycle: collect → score → check → digest.
 
     Produces a Markdown digest and records all metrics.
     """
     import json
+
     from kassandra.soak import (
-        run_soak_cycle,
-        run_consistency_checks,
         collect_metrics,
         generate_digest,
         load_soak_state,
+        run_consistency_checks,
+        run_soak_cycle,
     )
 
     if digest_only:
@@ -540,8 +562,16 @@ def soak_cycle(digest_only: bool, check_only: bool) -> None:
 
 @cli.command(name="evidence-show")
 @click.argument("evidence_id", type=int)
-@click.option("--content", is_flag=True, help="Include stored content excerpt from the content-addressed object")
-@click.option("--include-inactive", is_flag=True, help="Explicitly show historical/tombstoned linked events (audit view)")
+@click.option(
+    "--content",
+    is_flag=True,
+    help="Include stored content excerpt from the content-addressed object",
+)
+@click.option(
+    "--include-inactive",
+    is_flag=True,
+    help="Explicitly show historical/tombstoned linked events (audit view)",
+)
 def evidence_show(evidence_id: int, content: bool, include_inactive: bool) -> None:
     """Show auditable provenance for an evidence item.
 
@@ -549,6 +579,7 @@ def evidence_show(evidence_id: int, content: bool, include_inactive: bool) -> No
     linked events, and an excerpt so an analyst can verify what drove an alert.
     """
     import json
+
     from kassandra.evidence import get_evidence_path
 
     db = get_db()
@@ -565,15 +596,18 @@ def evidence_show(evidence_id: int, content: bool, include_inactive: bool) -> No
         raise click.ClickException(f"Evidence {evidence_id} not found")
 
     event_filter = "" if include_inactive else "AND e.active = 1 AND e.status = 'active'"
-    events = [dict(r) for r in db.execute(
-        f"""SELECT e.id, e.event_type, e.severity, e.confidence, e.description,
+    events = [
+        dict(r)
+        for r in db.execute(
+            f"""SELECT e.id, e.event_type, e.severity, e.confidence, e.description,
                   e.extracted_at, e.active, e.status, r.canonical_name
            FROM events e
            LEFT JOIN registry r ON e.registry_id = r.id
            WHERE e.evidence_id = ? {event_filter}
            ORDER BY e.id""",
-        (evidence_id,),
-    )]
+            (evidence_id,),
+        )
+    ]
     payload = dict(row)
     payload["events"] = events
     payload["view"] = "historical_audit" if include_inactive else "current"
@@ -588,12 +622,34 @@ def evidence_show(evidence_id: int, content: bool, include_inactive: bool) -> No
 
 
 @cli.command(name="alert-daemon")
-@click.option("--once", is_flag=True, help="Run one fast alert cycle and exit (cron/launchd friendly)")
-@click.option("--interval", default=300, show_default=True, help="Polling interval in seconds for continuous daemon mode")
-@click.option("--source", "sources", multiple=True, help="Source to poll; repeatable. Defaults to Companies House + UK Gazette")
-@click.option("--include-medium", is_flag=True, help="Also alert on medium-severity events (more noise)")
-@click.option("--include-unconfirmed", is_flag=True, help="Include unconfirmed_adverse events (more noise)")
-def alert_daemon(once: bool, interval: int, sources: tuple[str, ...], include_medium: bool, include_unconfirmed: bool) -> None:
+@click.option(
+    "--once", is_flag=True, help="Run one fast alert cycle and exit (cron/launchd friendly)"
+)
+@click.option(
+    "--interval",
+    default=300,
+    show_default=True,
+    help="Polling interval in seconds for continuous daemon mode",
+)
+@click.option(
+    "--source",
+    "sources",
+    multiple=True,
+    help="Source to poll; repeatable. Defaults to Companies House + UK Gazette",
+)
+@click.option(
+    "--include-medium", is_flag=True, help="Also alert on medium-severity events (more noise)"
+)
+@click.option(
+    "--include-unconfirmed", is_flag=True, help="Include unconfirmed_adverse events (more noise)"
+)
+def alert_daemon(
+    once: bool,
+    interval: int,
+    sources: tuple[str, ...],
+    include_medium: bool,
+    include_unconfirmed: bool,
+) -> None:
     """Run the near-real-time adverse-event alert daemon.
 
     The daily soak cron remains responsible for the full daily change digest.
@@ -622,11 +678,26 @@ def alert_daemon(once: bool, interval: int, sources: tuple[str, ...], include_me
 
 
 @cli.command()
-@click.option("--dry-run", "_dry_run", is_flag=True, default=True, help="Show what would be changed without applying (default: True)")
-@click.option("--apply", "do_apply", is_flag=True, help="Actually apply changes (dry-run is default)")
-@click.option("--manifest", "manifest_path", type=click.Path(exists=True), required=True,
-              help="Path to JSON array or line-delimited text file listing event IDs to demote")
-def backfill_unconfirmed_review_candidates(_dry_run: bool, do_apply: bool, manifest_path: str) -> None:
+@click.option(
+    "--dry-run",
+    "_dry_run",
+    is_flag=True,
+    default=True,
+    help="Show what would be changed without applying (default: True)",
+)
+@click.option(
+    "--apply", "do_apply", is_flag=True, help="Actually apply changes (dry-run is default)"
+)
+@click.option(
+    "--manifest",
+    "manifest_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to JSON array or line-delimited text file listing event IDs to demote",
+)
+def backfill_unconfirmed_review_candidates(
+    _dry_run: bool, do_apply: bool, manifest_path: str
+) -> None:
     """Backfill: reclassify specific legal-registry events as review candidates.
 
     Reads a manifest file listing exact event IDs approved for demotion.
@@ -638,7 +709,7 @@ def backfill_unconfirmed_review_candidates(_dry_run: bool, do_apply: bool, manif
     Refuses to run without --manifest.
     """
     import json
-    from datetime import datetime, timezone
+    from datetime import datetime
     from pathlib import Path
 
     mp = Path(manifest_path)
@@ -670,7 +741,7 @@ def backfill_unconfirmed_review_candidates(_dry_run: bool, do_apply: bool, manif
     db = get_db()
     try:
         sources = ("bodacc_fr", "borme_es", "uk_gazette")
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         validated: list[tuple[int, str, int, int, str, str, str]] = []
         skipped_invalid: list[tuple[int, str]] = []
@@ -710,7 +781,9 @@ def backfill_unconfirmed_review_candidates(_dry_run: bool, do_apply: bool, manif
             excerpt = (row["excerpt"] or "")[:200]
             canonical_name = row["canonical_name"]
 
-            validated.append((eid, source, registry_id, evidence_id, excerpt, canonical_name, row["event_type"]))
+            validated.append(
+                (eid, source, registry_id, evidence_id, excerpt, canonical_name, row["event_type"])
+            )
 
         for eid, source, registry_id, evidence_id, excerpt, canonical_name, event_type in validated:
             # Insert into queue (idempotent)
@@ -722,10 +795,16 @@ def backfill_unconfirmed_review_candidates(_dry_run: bool, do_apply: bool, manif
                             candidate_registry_name, match_type, match_confidence,
                             evidence_id, evidence_excerpt, status, created_at, updated_at)
                            VALUES (?, ?, ?, ?, 'backfill_demoted', 0.15, ?, ?, 'pending', ?, ?)""",
-                        (source, excerpt[:200], registry_id,
-                         canonical_name, evidence_id,
-                         f"Backfill manifest: demoted {event_type}. {excerpt}"[:2000],
-                         now, now),
+                        (
+                            source,
+                            excerpt[:200],
+                            registry_id,
+                            canonical_name,
+                            evidence_id,
+                            f"Backfill manifest: demoted {event_type}. {excerpt}"[:2000],
+                            now,
+                            now,
+                        ),
                     )
                     db.commit()
                 except Exception as exc:
@@ -759,6 +838,7 @@ def backfill_unconfirmed_review_candidates(_dry_run: bool, do_apply: bool, manif
 
         clicked_queued = len(already_queued) + len(inserted)
         click.echo(f"Manifest loaded: {len(event_ids)} IDs")
+        click.echo(f"  Queued or already queued:   {clicked_queued}")
         click.echo(f"  Skipped (not found):        {len(skipped_invalid)}")
         click.echo(f"  Skipped (wrong source):     {len(skipped_wrong_source)}")
         click.echo(f"  Skipped (not active):       {len(skipped_not_active)}")

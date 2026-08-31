@@ -4,13 +4,11 @@ Uses a temporary file-backed SQLite DB so that the CLI can open and close its
 own connection independently, and the test can reopen afterward to assert state.
 """
 
-import json
 import sqlite3
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from click.testing import CliRunner
 
 from kassandra.cli import cli as backfill_cli
@@ -20,6 +18,7 @@ def _make_backfill_db_file() -> Path:
     """Create a temp file-backed DB pre-populated with test data. Returns the path."""
     fd, db_path = tempfile.mkstemp(suffix=".db")
     import os
+
     os.close(fd)
 
     db = sqlite3.connect(db_path)
@@ -164,9 +163,13 @@ class TestBackfillCliSafety:
         db.row_factory = sqlite3.Row
         try:
             for eid in eids:
-                row = db.execute("SELECT active, status FROM events WHERE id = ?", (eid,)).fetchone()
+                row = db.execute(
+                    "SELECT active, status FROM events WHERE id = ?", (eid,)
+                ).fetchone()
                 assert row is not None, f"Event {eid} not found"
-                assert row["active"] == expected_active, f"Event {eid} active={row['active']}, expected {expected_active}"
+                assert row["active"] == expected_active, (
+                    f"Event {eid} active={row['active']}, expected {expected_active}"
+                )
         finally:
             db.close()
 
@@ -183,12 +186,17 @@ class TestBackfillCliSafety:
         # Monkeypatch get_db on the cli module so the command opens a fresh connection
         runner = CliRunner()
         with patch("kassandra.cli.get_db", side_effect=_get_db):
-            result = runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name,
-            ])
+            result = runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                ],
+            )
 
         import os
+
         os.unlink(manifest_file.name)
 
         # Reopen to assert
@@ -219,12 +227,18 @@ class TestBackfillCliSafety:
 
         runner = CliRunner()
         with patch("kassandra.cli.get_db", side_effect=_get_db):
-            result = runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name, "--apply",
-            ])
+            result = runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                    "--apply",
+                ],
+            )
 
         import os
+
         os.unlink(manifest_file.name)
 
         assert result.exit_code == 0
@@ -232,7 +246,9 @@ class TestBackfillCliSafety:
         db = sqlite3.connect(str(db_path))
         db.row_factory = sqlite3.Row
         for eid in [100, 101]:
-            row = db.execute("SELECT active, status, tombstone_reason FROM events WHERE id = ?", (eid,)).fetchone()
+            row = db.execute(
+                "SELECT active, status, tombstone_reason FROM events WHERE id = ?", (eid,)
+            ).fetchone()
             assert row["active"] == 0
             assert row["status"] == "tombstoned"
             assert "backfill manifest" in (row["tombstone_reason"] or "")
@@ -260,12 +276,18 @@ class TestBackfillCliSafety:
 
         runner = CliRunner()
         with patch("kassandra.cli.get_db", side_effect=_get_db):
-            runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name, "--apply",
-            ])
+            runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                    "--apply",
+                ],
+            )
 
         import os
+
         os.unlink(manifest_file.name)
 
         db = sqlite3.connect(str(db_path))
@@ -294,12 +316,18 @@ class TestBackfillCliSafety:
 
         runner = CliRunner()
         with patch("kassandra.cli.get_db", side_effect=_get_db):
-            result = runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name, "--apply",
-            ])
+            result = runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                    "--apply",
+                ],
+            )
 
         import os
+
         os.unlink(manifest_file.name)
 
         assert "Skipped (not found):" in result.output
@@ -328,12 +356,18 @@ class TestBackfillCliSafety:
 
         runner = CliRunner()
         with patch("kassandra.cli.get_db", side_effect=_get_db):
-            result = runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name, "--apply",
-            ])
+            result = runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                    "--apply",
+                ],
+            )
 
         import os
+
         os.unlink(manifest_file.name)
 
         assert "Skipped (not active):" in result.output
@@ -359,19 +393,30 @@ class TestBackfillCliSafety:
 
         runner = CliRunner()
         with patch("kassandra.cli.get_db", side_effect=_get_db):
-            r1 = runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name, "--apply",
-            ])
+            r1 = runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                    "--apply",
+                ],
+            )
             assert r1.exit_code == 0
-            r2 = runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name, "--apply",
-            ])
+            r2 = runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                    "--apply",
+                ],
+            )
             assert r2.exit_code == 0
             assert "Skipped (not active):" in r2.output
 
         import os
+
         os.unlink(manifest_file.name)
 
         db = sqlite3.connect(str(db_path))
@@ -395,12 +440,18 @@ class TestBackfillCliSafety:
 
         runner = CliRunner()
         with patch("kassandra.cli.get_db", side_effect=_get_db):
-            result = runner.invoke(backfill_cli, [
-                "backfill-unconfirmed-review-candidates",
-                "--manifest", manifest_file.name, "--apply",
-            ])
+            result = runner.invoke(
+                backfill_cli,
+                [
+                    "backfill-unconfirmed-review-candidates",
+                    "--manifest",
+                    manifest_file.name,
+                    "--apply",
+                ],
+            )
 
         import os
+
         os.unlink(manifest_file.name)
 
         assert result.exit_code == 0

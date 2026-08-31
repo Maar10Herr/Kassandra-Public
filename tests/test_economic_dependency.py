@@ -5,23 +5,23 @@ Tests cover: extraction patterns, negative context filters, entity name
 capture, empty text, and edge deduplication.
 """
 
+from datetime import UTC
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from kassandra.sources.economic_dependency import (
-    discover_dependencies_from_text,
-    _extract_dependencies_for_type,
-    CUSTOMER_PATTERNS,
-    SUPPLIER_PATTERNS,
-    FACILITY_PATTERNS,
     COMMODITY_PATTERNS,
+    CUSTOMER_PATTERNS,
+    FACILITY_PATTERNS,
     OPERATIONAL_PATTERNS,
-    NEGATIVE_CONTEXT_PATTERNS,
+    SUPPLIER_PATTERNS,
+    _extract_dependencies_for_type,
+    discover_dependencies_from_text,
     extract_text_from_pdf,
 )
 
-
 # ── Fixtures ─────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 def asml_like_text():
@@ -75,11 +75,10 @@ def carbon_fiber_text():
 
 # ── Pattern extraction tests ─────────────────────────────────────────────────
 
+
 def test_extract_customer_dependencies(asml_like_text):
     """Named customers should be extracted from annual report text."""
-    deps = _extract_dependencies_for_type(
-        asml_like_text, "customer", CUSTOMER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(asml_like_text, "customer", CUSTOMER_PATTERNS, "test.pdf")
     assert len(deps) >= 1
     dep_types = {d["relationship"] for d in deps}
     assert "named_customer" in dep_types or "customer_concentration" in dep_types
@@ -87,9 +86,7 @@ def test_extract_customer_dependencies(asml_like_text):
 
 def test_extract_supplier_dependencies(asml_like_text):
     """Sole supplier dependencies should be extracted."""
-    deps = _extract_dependencies_for_type(
-        asml_like_text, "supplier", SUPPLIER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(asml_like_text, "supplier", SUPPLIER_PATTERNS, "test.pdf")
     # Zeiss sole supplier found. Key supplier may not match if text structure
     # differs from patterns. Minimum: 1 sole_supplier match.
     assert len(deps) >= 1
@@ -101,9 +98,7 @@ def test_extract_facility_dependencies():
     """Facility mentions should be extracted from text matching pattern syntax."""
     # Pattern requires: "manufacturing ... at/in ... facility in/at LOCATION"
     text = "We manufacture at our facility in San Diego. Production at our Veldhoven site."
-    deps = _extract_dependencies_for_type(
-        text, "facility", FACILITY_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "facility", FACILITY_PATTERNS, "test.pdf")
     assert len(deps) >= 1
 
 
@@ -131,9 +126,7 @@ def test_extract_operational_dependencies(asml_like_text):
 def test_confidence_sole_supplier():
     """Sole supplier patterns should get high confidence (0.85)."""
     text = "We are dependent on XYZ Corp, our sole supplier of critical widgets."
-    deps = _extract_dependencies_for_type(
-        text, "supplier", SUPPLIER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "supplier", SUPPLIER_PATTERNS, "test.pdf")
     assert len(deps) >= 1
     for dep in deps:
         if "sole" in dep["matched_text"].lower():
@@ -150,14 +143,13 @@ def test_discover_all_types(asml_like_text):
 
 def test_discover_specific_types_only(asml_like_text):
     """Filtering by specific dependency types should work."""
-    deps = discover_dependencies_from_text(
-        asml_like_text, "test.pdf", dep_types=["customer"]
-    )
+    deps = discover_dependencies_from_text(asml_like_text, "test.pdf", dep_types=["customer"])
     types_found = {d["dependency_type"] for d in deps}
     assert types_found == {"customer"}
 
 
 # ── Negative context filter tests ────────────────────────────────────────────
+
 
 def test_esg_fluff_returns_empty(esg_fluff_text):
     """Pure ESG/marketing text should yield zero dependencies."""
@@ -170,9 +162,7 @@ def test_esg_fluff_returns_empty(esg_fluff_text):
 def test_art_festival_filtered():
     """Art festival sponsorships should be filtered."""
     text = "Collaborating with GLOW Light Art Festival in showcasing light art."
-    deps = _extract_dependencies_for_type(
-        text, "operational", OPERATIONAL_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "operational", OPERATIONAL_PATTERNS, "test.pdf")
     # No operational dependency from a festival sponsorship
     operational = [d for d in deps]
     assert len(operational) == 0  # No joint venture/license/outsource/franchise match
@@ -197,14 +187,13 @@ def test_carbon_fiber_not_filtered(carbon_fiber_text):
 def test_carbon_neutral_filtered():
     """'Carbon neutral' should still be filtered as ESG fluff."""
     text = "Our key supplier for carbon neutral offset programs is EcoCorp."
-    deps = _extract_dependencies_for_type(
-        text, "supplier", SUPPLIER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "supplier", SUPPLIER_PATTERNS, "test.pdf")
     # "carbon neutral" should match negative filter → 0 results
     assert len(deps) == 0
 
 
 # ── Entity name extraction tests ─────────────────────────────────────────────
+
 
 def test_entity_name_captured():
     r"""When a named entity is in a capture group, entity_name should be populated.
@@ -215,9 +204,7 @@ def test_entity_name_captured():
     """
     # Simpler text to avoid greedy regex capture
     text = "Taiwan Semiconductor Manufacturing Company is our largest customer."
-    deps = _extract_dependencies_for_type(
-        text, "customer", CUSTOMER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "customer", CUSTOMER_PATTERNS, "test.pdf")
     assert len(deps) >= 1
     names = [d.get("entity_name", "") for d in deps]
     # At least one dependency should have a named entity captured
@@ -227,9 +214,7 @@ def test_entity_name_captured():
 def test_entity_name_not_captured_for_pattern_only():
     """When no capture group, entity_name should be None."""
     text = "No single customer accounts for more than 10% of revenue."
-    deps = _extract_dependencies_for_type(
-        text, "customer", CUSTOMER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "customer", CUSTOMER_PATTERNS, "test.pdf")
     # Customer concentration pattern may not have a named entity capture
     for dep in deps:
         if dep["relationship"] == "customer_concentration":
@@ -240,15 +225,14 @@ def test_entity_name_not_captured_for_pattern_only():
 def test_short_entity_name_filtered():
     """Entity names < 3 chars should be filtered out."""
     text = "AI is our largest customer."  # "AI" is 2 chars
-    deps = _extract_dependencies_for_type(
-        text, "customer", CUSTOMER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "customer", CUSTOMER_PATTERNS, "test.pdf")
     for dep in deps:
         if dep.get("entity_name"):
             assert len(dep["entity_name"]) >= 3
 
 
 # ── Edge cases ───────────────────────────────────────────────────────────────
+
 
 def test_empty_text_returns_empty():
     """Empty text should produce zero dependencies."""
@@ -271,9 +255,7 @@ def test_duplicate_spans_deduped():
     different semantics. The dedup check only operates within the same regex.
     """
     text = "TSMC is our largest customer.\nTSMC is our largest customer.\nTSMC is our largest customer."
-    deps = _extract_dependencies_for_type(
-        text, "customer", CUSTOMER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "customer", CUSTOMER_PATTERNS, "test.pdf")
     # Multiple patterns may match the same text — expect at least 1, max N patterns
     assert len(deps) >= 1
     # Verify no duplicate within the same pattern_id
@@ -282,6 +264,7 @@ def test_duplicate_spans_deduped():
 
 
 # ── Source URL preservation ──────────────────────────────────────────────────
+
 
 def test_source_url_preserved():
     """All extracted dependencies should carry the source URL."""
@@ -295,12 +278,11 @@ def test_source_url_preserved():
 
 # ── Uncertainty reason ───────────────────────────────────────────────────────
 
+
 def test_uncertainty_reason_present():
     """All dependencies should have an uncertainty_reason."""
     text = "We depend on Carl Zeiss SMT GmbH, our sole supplier of optical columns."
-    deps = _extract_dependencies_for_type(
-        text, "supplier", SUPPLIER_PATTERNS, "test.pdf"
-    )
+    deps = _extract_dependencies_for_type(text, "supplier", SUPPLIER_PATTERNS, "test.pdf")
     for dep in deps:
         assert "uncertainty_reason" in dep
         assert dep["uncertainty_reason"] is not None
@@ -309,10 +291,12 @@ def test_uncertainty_reason_present():
 
 # ── PDF extraction mock test ─────────────────────────────────────────────────
 
+
 def test_extract_text_from_pdf_mocked():
     """PDF extraction should work when PyMuPDF is available."""
     # This tests the function signature and error handling, not actual PDF content
     from pathlib import Path
+
     result = extract_text_from_pdf(Path("/nonexistent/file.pdf"))
     # Should return None for nonexistent file, not crash
     assert result is None
@@ -362,7 +346,7 @@ We are committed to DEI initiatives across our global workforce.
 def test_db():
     """Create an in-memory database with test schema and fixture data."""
     import sqlite3
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
@@ -465,7 +449,7 @@ def test_db():
     """)
 
     # Insert test portfolio company
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     db.execute(
         "INSERT INTO registry (id, canonical_name, company_type, jurisdiction) "
         "VALUES (1, 'TestCorp NV', 'corporate', 'NL')"
@@ -488,15 +472,16 @@ def test_end_to_end_pipeline(test_db):
     This test would have caught the NULL target_registry_id bug that
     silently discarded 342 extracted dependencies for weeks.
     """
-    from kassandra.sources.economic_dependency import (
-        discover_dependencies_from_text,
-        store_dependency_edges,
-        promote_existing_economic_entities,
-    )
-    from kassandra.scoring import _compute_economic_dependency_exposure
-
     # 1. Create evidence
     import hashlib
+
+    from kassandra.scoring import _compute_economic_dependency_exposure
+    from kassandra.sources.economic_dependency import (
+        discover_dependencies_from_text,
+        promote_existing_economic_entities,
+        store_dependency_edges,
+    )
+
     content_hash = hashlib.sha256(FIXTURE_ANNUAL_REPORT_TEXT.encode()).hexdigest()
     test_db.execute(
         """INSERT INTO evidence (id, content_hash, source_url, retrieval_time,

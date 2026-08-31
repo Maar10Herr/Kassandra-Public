@@ -14,9 +14,7 @@ from kassandra.sources.gleif import GleifClient
 logger = logging.getLogger(__name__)
 
 
-def enrich_placeholders(
-    db: Any, max_enrich: int = 200, batch_delay: float = 0.5
-) -> int:
+def enrich_placeholders(db: Any, max_enrich: int = 200, batch_delay: float = 0.5) -> int:
     """Resolve LEI placeholders to named entities from GLEIF.
 
     Prioritizes placeholders referenced by portfolio company edges.
@@ -27,7 +25,8 @@ def enrich_placeholders(
     enriched = 0
 
     # Find placeholders that are targets of portfolio company edges
-    rows = db.execute("""
+    rows = db.execute(
+        """
         SELECT DISTINCT r.id, r.lei
         FROM registry r
         JOIN edges e ON r.id = e.target_registry_id
@@ -36,7 +35,9 @@ def enrich_placeholders(
           AND src.domain IS NOT NULL  -- portfolio company
         ORDER BY r.id
         LIMIT ?
-    """, (max_enrich,)).fetchall()
+    """,
+        (max_enrich,),
+    ).fetchall()
 
     logger.info(f"Enriching {len(rows)} LEI placeholders with names")
 

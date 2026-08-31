@@ -38,7 +38,7 @@ coverage cannot create an adverse-watch score by themselves.
 Using [`uv`](https://docs.astral.sh/uv/):
 
 ```sh
-uv sync --extra dev
+uv sync --all-extras --frozen
 uv run kassandra --help
 ```
 
@@ -62,6 +62,10 @@ uv run kassandra build-graph
 uv run kassandra score
 uv run kassandra dashboard --port 8765
 ```
+
+The dashboard binds to loopback and generates a per-process authentication
+URL. Open the URL printed in the local log; its token is exchanged for an
+HTTP-only, same-site session cookie and removed from the browser address bar.
 
 `collect` makes network requests to configured public sources. Review the
 source inventory and applicable access conditions before enabling an adapter.
@@ -153,17 +157,24 @@ COMPANIES_HOUSE_API_KEY=replace_with_your_own_key
 
 The application reads explicit project configuration only. Keep `.env`,
 SQLite files, evidence objects, portfolios, logs, schedules, and backups out of
-version control. Use least-privilege credentials and place the dashboard behind
-access controls appropriate to the environment.
+version control. Use least-privilege credentials. Keep the dashboard on
+loopback and retain its generated session boundary. Run collectors behind an
+egress firewall when configured source domains are not fully trusted: every URL
+and redirect is checked against non-public address ranges, standard HTTPX
+connections are pinned to approved addresses, and every body is size-bounded.
+Custom transports still require network-level egress controls.
 
 This release has not received an external security audit. Treat collected
 documents and analyst portfolios according to their confidentiality and
-retention requirements.
+retention requirements. See [`SECURITY.md`](SECURITY.md) for reporting and
+deployment boundaries.
 
 ## Verification
 
 ```sh
-uv sync --extra dev
+uv sync --all-extras --frozen
+uv run ruff check .
+uv run ruff format --check .
 uv run pytest -q
 uv run python -m compileall -q src tests
 ```

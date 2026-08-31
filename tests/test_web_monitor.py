@@ -1,12 +1,13 @@
-"""Tests for web monitor module."""
+"""Tests for web monitor modules."""
 
-import sqlite3
+import asyncio
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from kassandra.db import migrate, _connect
+from kassandra.db import _connect, migrate
+from kassandra.sources.async_web_monitor import AsyncWebMonitor
 from kassandra.sources.web_monitor import WebMonitor
 
 
@@ -28,7 +29,6 @@ def temp_db():
 class TestWebMonitor:
     def test_sitemap_parse_static(self):
         """Can parse static sitemap XML string."""
-        monitor = WebMonitor()
         # Use a static XML string instead of hitting example.com
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -36,8 +36,10 @@ class TestWebMonitor:
   <url><loc>https://example.com/page2</loc></url>
 </urlset>"""
         import re
+
         xml_text = re.sub(r' xmlns="[^"]*"', "", xml)
         from xml.etree import ElementTree
+
         root = ElementTree.fromstring(xml_text)
         urls = [u.findtext("loc") for u in root.findall("url")]
         assert len(urls) == 2
@@ -96,3 +98,30 @@ class TestWebMonitor:
         ).fetchone()
         assert row["last_etag"] == '"new"'
         assert row["last_status_code"] == 304
+
+
+def test_async_monitor_uses_bounded_worker_count(monkeypatch):
+    monitor = AsyncWebMonitor(max_concurrency=2)
+    companies = [{"registry_id": index, "domain": f"company-{index}.example"} for index in range(5)]
+    active = 0
+    peak = 0
+
+    async def fake_monitor_one(client, db, company):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return company["registry_id"]
+
+    monkeypatch.setattr(monitor, "_monitor_one", fake_monitor_one)
+    counts = asyncio.run(monitor.monitor_all_companies(object(), companies))
+
+    assert peak == 2
+    assert counts == {index: index for index in range(5)}
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5])
+def test_async_monitor_rejects_invalid_concurrency(value):
+    with pytest.raises((TypeError, ValueError)):
+        AsyncWebMonitor(max_concurrency=value)

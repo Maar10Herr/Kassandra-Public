@@ -5,15 +5,13 @@ and metadata is recorded in SQLite. Content is never modified after storage.
 """
 
 import hashlib
-import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from kassandra.config import get_config
-from kassandra.contracts import EvidenceResult, EventResult
+from kassandra.contracts import EventResult, EvidenceResult
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +71,7 @@ def store_evidence(
         file_path.write_bytes(content_bytes)
 
     # Record metadata
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     cursor = db.execute(
         """INSERT INTO evidence
            (content_hash, source_url, retrieval_time, publication_time,

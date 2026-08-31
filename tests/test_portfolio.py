@@ -1,12 +1,11 @@
 """Tests for portfolio import."""
 
-import sqlite3
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from kassandra.db import migrate, _connect
+from kassandra.db import _connect, migrate
 from kassandra.portfolio import import_euro_stoxx_50
 
 
@@ -58,8 +57,7 @@ class TestPortfolio:
         """Known key companies are present."""
         import_euro_stoxx_50(temp_db)
         names = {
-            row["name"]
-            for row in temp_db.execute("SELECT name FROM portfolio_items").fetchall()
+            row["name"] for row in temp_db.execute("SELECT name FROM portfolio_items").fetchall()
         }
         assert "LVMH" in names
         assert "SAP" in names

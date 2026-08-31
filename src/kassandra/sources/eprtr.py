@@ -18,12 +18,12 @@ location with the operational_shutdown shock channel.
 import csv
 import logging
 import sqlite3
-import ssl
-import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
-from pathlib import Path
+
+import httpx
+
+from kassandra.http_security import safe_get
 from kassandra.shock_channel import populate_edge_attributes
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ EPRTR_URLS = [
     "https://sdi.eea.europa.eu/webdav/datastore/public"
     "/eea_v_3035_1_mio_e-prtr_p_2007-2022_v01_r00/EPRTR.csv",
 ]
+MAX_EPRTR_BYTES = 128 * 1024 * 1024
 
 
 def _download_eprtr_csv() -> Path | None:
@@ -51,30 +52,32 @@ def _download_eprtr_csv() -> Path | None:
         return csv_path
 
     try:
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
         for url in EPRTR_URLS:
             try:
                 logger.info(f"Downloading E-PRTR from {url}")
                 csv_path_temp = CACHE_DIR / "EPRTR.csv.tmp"
 
-                req = urllib.request.Request(
-                    url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                      "Chrome/131.0.0.0 Safari/537.36",
-                        "Accept": "text/csv,text/plain,*/*",
-                    },
-                )
-                with urllib.request.urlopen(req, context=ctx, timeout=120) as resp:
-                    csv_path_temp.write_bytes(resp.read())
+                with httpx.Client(timeout=120, follow_redirects=False, trust_env=False) as client:
+                    response = safe_get(
+                        client,
+                        url,
+                        timeout=120,
+                        max_bytes=MAX_EPRTR_BYTES,
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/131.0.0.0 Safari/537.36",
+                            "Accept": "text/csv,text/plain,*/*",
+                        },
+                    )
+                    response.raise_for_status()
+                    csv_path_temp.write_bytes(response.content)
 
                 csv_path_temp.rename(csv_path)
-                logger.info(f"E-PRTR downloaded to {csv_path} "
-                             f"({csv_path.stat().st_size / 1_000_000:.1f} MB)")
+                logger.info(
+                    f"E-PRTR downloaded to {csv_path} "
+                    f"({csv_path.stat().st_size / 1_000_000:.1f} MB)"
+                )
                 return csv_path
             except Exception as e:
                 logger.debug(f"E-PRTR URL {url} failed: {e}")
@@ -87,14 +90,25 @@ def _download_eprtr_csv() -> Path | None:
         return None
 
 
-_SIMPLIFY_MAP = str.maketrans({
-    "é": "e", "è": "e", "ê": "e", "ë": "e",
-    "à": "a", "â": "a", "ä": "a",
-    "ô": "o", "ö": "o",
-    "ù": "u", "û": "u", "ü": "u",
-    "î": "i", "ï": "i",
-    "ç": "c",
-})
+_SIMPLIFY_MAP = str.maketrans(
+    {
+        "é": "e",
+        "è": "e",
+        "ê": "e",
+        "ë": "e",
+        "à": "a",
+        "â": "a",
+        "ä": "a",
+        "ô": "o",
+        "ö": "o",
+        "ù": "u",
+        "û": "u",
+        "ü": "u",
+        "î": "i",
+        "ï": "i",
+        "ç": "c",
+    }
+)
 
 
 def _simplify_name(name: str) -> str:
@@ -161,7 +175,7 @@ def discover_eprtr_facilities(
             if len(token) >= 8:
                 name_tokens[token] = row["id"]
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     created = 0
     duplicates = 0
     errors = 0
@@ -261,9 +275,13 @@ def discover_eprtr_facilities(
                        VALUES (?, ?, 'facility_at', 0.8, 'eprtr', 'outgoing', ?,
                                ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        match_id, target_reg_id, now,
-                        attrs["shock_channel"], attrs["lag_bucket"],
-                        attrs["buffer_proxy"], attrs["switching_time_bucket"],
+                        match_id,
+                        target_reg_id,
+                        now,
+                        attrs["shock_channel"],
+                        attrs["lag_bucket"],
+                        attrs["buffer_proxy"],
+                        attrs["switching_time_bucket"],
                         f"E-PRTR: {facility_name} operated by {parent_company or 'unknown'} in {city}, {country}. Match: {match_type}",
                         "eprtr_regulatory_dataset",
                         dedup_key,
@@ -299,6 +317,7 @@ def discover_eprtr_facilities(
 def main():
     """CLI entry point for standalone E-PRTR run."""
     import argparse
+
     from kassandra.db import get_db
 
     parser = argparse.ArgumentParser(description="Discover E-PRTR facility edges")
@@ -313,8 +332,10 @@ def main():
     if args.dry_run:
         print(f"DRY RUN: Found {result.get('facilities_in_dataset', 0)} facilities")
     else:
-        print(f"Created {result['created']} E-PRTR facility edges "
-              f"({result['duplicates']} duplicates, {result['errors']} errors)")
+        print(
+            f"Created {result['created']} E-PRTR facility edges "
+            f"({result['duplicates']} duplicates, {result['errors']} errors)"
+        )
 
 
 if __name__ == "__main__":

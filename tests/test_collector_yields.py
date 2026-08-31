@@ -7,18 +7,16 @@ Verifies:
   - Latency tracking populated in source_runs
 """
 
-import json
-import sqlite3
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kassandra.contracts import CollectionMetrics, EvidenceResult, EventResult, MatchResult
+from kassandra.contracts import CollectionMetrics
 from kassandra.db import _connect, migrate
-from kassandra.evidence import store_evidence, store_event
+from kassandra.evidence import store_event, store_evidence
 
 
 @pytest.fixture
@@ -75,16 +73,22 @@ class TestNewVsExistingEvidence:
         content = "duplicate-bound content"
 
         r1 = store_evidence(
-            db=temp_db, content=content,
-            source_url="https://site-a.com", retrieval_time="2025-06-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content=content,
+            source_url="https://site-a.com",
+            retrieval_time="2025-06-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         assert r1.is_new is True
 
         r2 = store_evidence(
-            db=temp_db, content=content,
-            source_url="https://site-b.com/different-url", retrieval_time="2025-06-02T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content=content,
+            source_url="https://site-b.com/different-url",
+            retrieval_time="2025-06-02T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         assert r2.is_new is False
         assert r2.evidence_id == r1.evidence_id
@@ -98,14 +102,20 @@ class TestNewVsExistingEvidence:
         # Simulate what a buggy collector would do: count any ID returned
         content = "collector test content"
         r1 = store_evidence(
-            db=temp_db, content=content,
-            source_url="https://a.com", retrieval_time="2025-06-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content=content,
+            source_url="https://a.com",
+            retrieval_time="2025-06-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         r2 = store_evidence(
-            db=temp_db, content=content,
-            source_url="https://b.com", retrieval_time="2025-06-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content=content,
+            source_url="https://b.com",
+            retrieval_time="2025-06-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
 
         # Buggy: increment whenever an ID is returned
@@ -117,9 +127,7 @@ class TestNewVsExistingEvidence:
 
         assert correct_new == 1, "Only one call should count as new evidence"
         assert correct_dup == 1, "One call should count as duplicate"
-        assert buggy_count != correct_new, (
-            "Buggy counting conflates new and existing evidence"
-        )
+        assert buggy_count != correct_new, "Buggy counting conflates new and existing evidence"
 
 
 # ── events_created propagated to source_runs ──────────────────────────────────
@@ -133,22 +141,31 @@ class TestEventsFoundPropagated:
         reg_id = _insert_registry(temp_db, "TestCo", jurisdiction="GB")
 
         ev_result = store_evidence(
-            db=temp_db, content="event-triggering content",
-            source_url="https://src.com/event", retrieval_time="2025-06-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="event-triggering content",
+            source_url="https://src.com/event",
+            retrieval_time="2025-06-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
 
         # First event: inserted
         r1 = store_event(
-            db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_result.evidence_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert r1.status == "inserted"
 
         # Second event (same key): duplicate
         r2 = store_event(
-            db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_result.evidence_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert r2.status == "duplicate"
 
@@ -166,7 +183,7 @@ class TestEventsFoundPropagated:
 
     def test_adverse_events_found_in_source_runs(self, temp_db):
         """source_runs row must contain the correct adverse_events_found count."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         actual_events = 3  # 3 new events were created
 
         temp_db.execute(
@@ -179,12 +196,21 @@ class TestEventsFoundPropagated:
                 adverse_events_found,
                 latency_seconds, started_at, completed_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            ("run-adverse-001", "companies_house",
-             100, 90, 10, 80,
-             5,
-             actual_events, 2,
-             actual_events,  # adverse_events_found = events_created
-             3.45, now, now),
+            (
+                "run-adverse-001",
+                "companies_house",
+                100,
+                90,
+                10,
+                80,
+                5,
+                actual_events,
+                2,
+                actual_events,  # adverse_events_found = events_created
+                3.45,
+                now,
+                now,
+            ),
         )
         temp_db.commit()
 
@@ -201,7 +227,7 @@ class TestEventsFoundPropagated:
 
     def test_zero_events_produces_zero_adverse(self, temp_db):
         """When no events are created, adverse_events_found must be 0."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         temp_db.execute(
             """INSERT INTO source_runs
@@ -237,9 +263,12 @@ class TestClassifierRunReconciliation:
         reg_id = _insert_registry(temp_db, "TestCo")
 
         ev_result = store_evidence(
-            db=temp_db, content="classifier dedup test",
-            source_url="https://src.com/classify", retrieval_time="2025-06-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="classifier dedup test",
+            source_url="https://src.com/classify",
+            retrieval_time="2025-06-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
 
         # Simulate classifier: 5 pattern hits accepted
@@ -250,8 +279,11 @@ class TestClassifierRunReconciliation:
         duplicates = 0
         for _ in range(classifier_accepted):
             r = se(
-                db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-                event_type="profit_warning", severity="medium",
+                db=temp_db,
+                evidence_id=ev_result.evidence_id,
+                registry_id=reg_id,
+                event_type="profit_warning",
+                severity="medium",
             )
             if r.status == "inserted":
                 inserted += 1
@@ -276,9 +308,12 @@ class TestClassifierRunReconciliation:
         reg_id = _insert_registry(temp_db, "TestCo")
 
         ev_result = store_evidence(
-            db=temp_db, content="unique events test",
-            source_url="https://src.com/unique", retrieval_time="2025-06-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="unique events test",
+            source_url="https://src.com/unique",
+            retrieval_time="2025-06-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
 
         event_types = ["insolvency", "restructuring", "profit_warning"]
@@ -287,8 +322,11 @@ class TestClassifierRunReconciliation:
 
         for etype in event_types:
             r = se(
-                db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-                event_type=etype, severity="medium",
+                db=temp_db,
+                evidence_id=ev_result.evidence_id,
+                registry_id=reg_id,
+                event_type=etype,
+                severity="medium",
             )
             if r.status == "inserted":
                 inserted += 1
@@ -324,9 +362,7 @@ class TestClassifierRunReconciliation:
         )
         assert row_id > 0
 
-        row = temp_db.execute(
-            "SELECT * FROM classifier_runs WHERE id = ?", (row_id,)
-        ).fetchone()
+        row = temp_db.execute("SELECT * FROM classifier_runs WHERE id = ?", (row_id,)).fetchone()
 
         assert row["candidate_pattern_hits"] == 10
         assert row["rejected_candidates"] == 2
@@ -342,17 +378,26 @@ class TestClassifierRunReconciliation:
         from kassandra.classifier import get_classifier_yield_report, record_classifier_run
 
         base = {
-            "documents_discovered": 100, "documents_fetched": 100,
-            "documents_with_text": 100, "documents_classified": 100,
-            "candidate_pattern_hits": 100, "rejected_candidates": 0,
+            "documents_discovered": 100,
+            "documents_fetched": 100,
+            "documents_with_text": 100,
+            "documents_classified": 100,
+            "candidate_pattern_hits": 100,
+            "rejected_candidates": 0,
             "false_positive_checks": 0,
         }
         record_classifier_run(
-            temp_db, "legacy", "bodacc_fr", None,
+            temp_db,
+            "legacy",
+            "bodacc_fr",
+            None,
             {**base, "accepted_events": 100},
         )
         record_classifier_run(
-            temp_db, "current", "bodacc_fr", None,
+            temp_db,
+            "current",
+            "bodacc_fr",
+            None,
             {**base, "rejected_candidates": 100, "accepted_events": 0},
         )
 
@@ -374,9 +419,14 @@ class TestLatencyTracking:
         from kassandra.collector import _record_source_yields
 
         m = CollectionMetrics(
-            run_id="run-latency", source_name="test_source",
-            discovered=10, fetched=10, new_evidence=3, duplicates=7,
-            events_created=2, duplicate_events=1,
+            run_id="run-latency",
+            source_name="test_source",
+            discovered=10,
+            fetched=10,
+            new_evidence=3,
+            duplicates=7,
+            events_created=2,
+            duplicate_events=1,
         )
         latencies = {"test_source": 4.567}
 
@@ -388,17 +438,19 @@ class TestLatencyTracking:
         ).fetchone()
 
         assert row is not None, "source_runs row must be inserted"
-        assert row["latency_seconds"] == 4.567, (
-            "latency_seconds must match the provided value"
-        )
+        assert row["latency_seconds"] == 4.567, "latency_seconds must match the provided value"
 
     def test_no_latency_defaults_to_null(self, temp_db):
         """When latency is not provided, latency_seconds should be NULL."""
         from kassandra.collector import _record_source_yields
 
         m = CollectionMetrics(
-            run_id="run-no-latency", source_name="test_source",
-            discovered=5, fetched=5, new_evidence=1, duplicates=4,
+            run_id="run-no-latency",
+            source_name="test_source",
+            discovered=5,
+            fetched=5,
+            new_evidence=1,
+            duplicates=4,
         )
         _record_source_yields(temp_db, "run-no-latency", {"test_source": m})
 
@@ -407,9 +459,7 @@ class TestLatencyTracking:
             ("run-no-latency",),
         ).fetchone()
 
-        assert row["latency_seconds"] is None, (
-            "latency_seconds should be NULL when not provided"
-        )
+        assert row["latency_seconds"] is None, "latency_seconds should be NULL when not provided"
 
     def test_run_collection_measures_latency(self, temp_db):
         """run_collection must measure per-source latency and pass to _record_source_yields."""
@@ -443,6 +493,7 @@ class TestLatencyTracking:
                 mock_bor.return_value.fetch_feed.return_value = []
 
             from kassandra.collector import run_collection
+
             metrics = run_collection(temp_db, sources=["companies_house"])
 
         assert "companies_house" in metrics
@@ -467,9 +518,12 @@ class TestCollectionMetricsCounting:
     def test_fetched_equals_new_plus_duplicates(self, temp_db):
         """fetched = new_evidence + duplicates."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            discovered=100, fetched=100,
-            new_evidence=20, duplicates=80,
+            run_id="r1",
+            source_name="test",
+            discovered=100,
+            fetched=100,
+            new_evidence=20,
+            duplicates=80,
         )
         assert m.fetched == m.new_evidence + m.duplicates
         m.assert_reconciled()
@@ -477,8 +531,11 @@ class TestCollectionMetricsCounting:
     def test_assert_reconciled_rejects_mismatch(self, temp_db):
         """assert_reconciled raises when fetched != new + dup."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            fetched=100, new_evidence=20, duplicates=70,
+            run_id="r1",
+            source_name="test",
+            fetched=100,
+            new_evidence=20,
+            duplicates=70,
         )
         with pytest.raises(ValueError, match="fetched must equal"):
             m.assert_reconciled()
@@ -486,8 +543,10 @@ class TestCollectionMetricsCounting:
     def test_unconfirmed_not_exceed_candidates(self, temp_db):
         """unconfirmed must not exceed candidates."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            candidates=5, unconfirmed=6,
+            run_id="r1",
+            source_name="test",
+            candidates=5,
+            unconfirmed=6,
         )
         with pytest.raises(ValueError, match="unconfirmed must not exceed"):
             m.assert_reconciled()
@@ -495,8 +554,11 @@ class TestCollectionMetricsCounting:
     def test_events_not_exceed_candidates(self, temp_db):
         """inserted + duplicate events must not exceed candidates."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            candidates=3, events_created=2, duplicate_events=2,
+            run_id="r1",
+            source_name="test",
+            candidates=3,
+            events_created=2,
+            duplicate_events=2,
         )
         with pytest.raises(ValueError, match="inserted plus duplicate events"):
             m.assert_reconciled()
@@ -504,7 +566,8 @@ class TestCollectionMetricsCounting:
     def test_negative_values_rejected(self, temp_db):
         """Negative counters are always invalid."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
+            run_id="r1",
+            source_name="test",
             new_evidence=-1,
         )
         with pytest.raises(ValueError, match="negative collection counters"):
@@ -527,9 +590,15 @@ class TestHandelsregisterCollectorIntegration:
         with patch("kassandra.collector.HandelsregisterClient") as mock_cls:
             mock_client = MagicMock()
             mock_client.collect_for_company_metrics.return_value = CollectionMetrics(
-                run_id="run-test-de", source_name="handelsregister_de",
-                discovered=1, fetched=2, new_evidence=1, duplicates=1,
-                candidates=2, events_created=2, duplicate_events=0,
+                run_id="run-test-de",
+                source_name="handelsregister_de",
+                discovered=1,
+                fetched=2,
+                new_evidence=1,
+                duplicates=1,
+                candidates=2,
+                events_created=2,
+                duplicate_events=0,
             )
             mock_cls.return_value = mock_client
 
@@ -546,8 +615,12 @@ class TestHandelsregisterCollectorIntegration:
         assert metrics.errors == 0
         metrics.assert_reconciled()
         mock_client.collect_for_company_metrics.assert_called_once_with(
-            db=temp_db, registry_id=1, company_name="Siemens AG", run_id="run-test-de",
+            db=temp_db,
+            registry_id=1,
+            company_name="Siemens AG",
+            run_id="run-test-de",
         )
         # search_and_store must NOT exist on the client
         from kassandra.sources.handelsregister import HandelsregisterClient
+
         assert not hasattr(HandelsregisterClient, "search_and_store")

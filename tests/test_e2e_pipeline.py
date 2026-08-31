@@ -9,19 +9,17 @@ Exercises the full pipeline against an in-memory/temp-file SQLite database:
 - Unconfirmed match queue
 """
 
-import json
 import sqlite3
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kassandra.db import SCHEMA_VERSION, _connect, migrate
-from kassandra.evidence import store_evidence, store_event
 from kassandra.contracts import CollectionMetrics
-
+from kassandra.db import SCHEMA_VERSION, _connect, migrate
+from kassandra.evidence import store_event, store_evidence
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -108,20 +106,13 @@ class TestMigrationBootstrap:
 
     def test_economic_entities_has_registry_id(self, temp_db):
         """economic_entities has registry_id column after migration."""
-        columns = {
-            row["name"]
-            for row in temp_db.execute("PRAGMA table_info(economic_entities)")
-        }
-        assert "registry_id" in columns, (
-            "economic_entities must have registry_id column"
-        )
+        columns = {row["name"] for row in temp_db.execute("PRAGMA table_info(economic_entities)")}
+        assert "registry_id" in columns, "economic_entities must have registry_id column"
 
     def test_schema_version_matches(self, temp_db):
         """migrate() returns SCHEMA_VERSION."""
         version = migrate(temp_db)
-        assert version == SCHEMA_VERSION, (
-            f"migrate() returned {version}, expected {SCHEMA_VERSION}"
-        )
+        assert version == SCHEMA_VERSION, f"migrate() returned {version}, expected {SCHEMA_VERSION}"
 
     def test_migration_is_idempotent(self, temp_db):
         """Running migrate twice returns same version."""
@@ -157,9 +148,7 @@ class TestEvidenceDedup:
 
         assert r1.is_new is True
         assert r2.is_new is False
-        assert r1.evidence_id == r2.evidence_id, (
-            "Dedup must return the same evidence_id"
-        )
+        assert r1.evidence_id == r2.evidence_id, "Dedup must return the same evidence_id"
 
         count = temp_db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
         assert count == 1, f"Expected 1 evidence row, got {count}"
@@ -297,7 +286,9 @@ class TestScoringSmoke:
     def test_compute_scores_returns_results(self, temp_db):
         """compute_scores returns a result for each scoreable company."""
         # Insert a scoreable company (must have domain set)
-        _insert_registry(temp_db, "ScoreCo", jurisdiction="GB", domain="scoreco.com", isin="XX0000000001")
+        _insert_registry(
+            temp_db, "ScoreCo", jurisdiction="GB", domain="scoreco.com", isin="XX0000000001"
+        )
 
         # Create a portfolio with this company
         temp_db.execute("INSERT INTO portfolios (name) VALUES (?)", ("Test Portfolio",))
@@ -311,6 +302,7 @@ class TestScoringSmoke:
         temp_db.commit()
 
         from kassandra.scoring import compute_scores
+
         results = compute_scores(temp_db)
 
         assert len(results) >= 1, "Should have at least one result"
@@ -355,13 +347,14 @@ class TestScoringSmoke:
             db=temp_db,
             content="adverse signal evidence",
             source_url="https://src.com/adverse",
-            retrieval_time=datetime.now(timezone.utc).isoformat(),
+            retrieval_time=datetime.now(UTC).isoformat(),
             extraction_method="test",
             parser_version="1.0",
         )
         store_event(temp_db, ev.evidence_id, reg_id, "insolvency", severity="critical")
 
         from kassandra.scoring import compute_scores
+
         results = compute_scores(temp_db)
 
         our_result = [r for r in results if r["canonical_name"] == "TroubledCo"]
@@ -370,11 +363,15 @@ class TestScoringSmoke:
 
         assert score["event_count"] >= 1, "Should have at least 1 event"
         assert score["signal_score"] > 0, "Adverse event should produce non-zero signal"
-        assert score["active_watch_priority"] > 0, "Insolvency event must produce non-zero active_watch_priority"
+        assert score["active_watch_priority"] > 0, (
+            "Insolvency event must produce non-zero active_watch_priority"
+        )
 
     def test_scores_are_stored_in_db(self, temp_db):
         """compute_scores writes rows to the scores table."""
-        _insert_registry(temp_db, "StoreCo", jurisdiction="GB", domain="storeco.com", isin="XX0000000003")
+        _insert_registry(
+            temp_db, "StoreCo", jurisdiction="GB", domain="storeco.com", isin="XX0000000003"
+        )
         temp_db.execute("INSERT INTO portfolios (name) VALUES (?)", ("Test PF",))
         pf_id = temp_db.execute("SELECT last_insert_rowid()").fetchone()[0]
         temp_db.execute(
@@ -386,6 +383,7 @@ class TestScoringSmoke:
         temp_db.commit()
 
         from kassandra.scoring import compute_scores
+
         compute_scores(temp_db)
 
         score_count = temp_db.execute("SELECT COUNT(*) FROM scores").fetchone()[0]
@@ -444,14 +442,22 @@ class TestSourceYieldRecording:
         m1 = CollectionMetrics(
             run_id="run-multi",
             source_name="source_a",
-            discovered=50, fetched=50, new_evidence=10, duplicates=40,
-            events_created=3, duplicate_events=1,
+            discovered=50,
+            fetched=50,
+            new_evidence=10,
+            duplicates=40,
+            events_created=3,
+            duplicate_events=1,
         )
         m2 = CollectionMetrics(
             run_id="run-multi",
             source_name="source_b",
-            discovered=30, fetched=30, new_evidence=5, duplicates=25,
-            events_created=0, duplicate_events=0,
+            discovered=30,
+            fetched=30,
+            new_evidence=5,
+            duplicates=25,
+            events_created=0,
+            duplicate_events=0,
         )
 
         _record_source_yields(temp_db, "run-multi", {"source_a": m1, "source_b": m2})
@@ -474,8 +480,12 @@ class TestSourceYieldRecording:
         from kassandra.collector import _record_source_yields
 
         m = CollectionMetrics(
-            run_id="run-no-lat", source_name="test_src",
-            discovered=10, fetched=10, new_evidence=2, duplicates=8,
+            run_id="run-no-lat",
+            source_name="test_src",
+            discovered=10,
+            fetched=10,
+            new_evidence=2,
+            duplicates=8,
         )
         _record_source_yields(temp_db, "run-no-lat", {"test_src": m})
 
@@ -504,7 +514,7 @@ class TestUnconfirmedMatchQueue:
         # Need a registry entry for FK reference
         reg_id = _insert_registry(temp_db, "Test Registry Entity")
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         temp_db.execute(
             """INSERT INTO unconfirmed_match_queue
                (source_name, source_entity_name, candidate_registry_id,
@@ -540,7 +550,7 @@ class TestUnconfirmedMatchQueue:
 
     def test_default_status_is_pending(self, temp_db):
         """Default status for new rows is 'pending'."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         temp_db.execute(
             """INSERT INTO unconfirmed_match_queue
                (source_name, source_entity_name, match_type, match_confidence,
@@ -560,7 +570,7 @@ class TestUnconfirmedMatchQueue:
         """The unique partial index prevents duplicate unresolved entries."""
         reg_id = _insert_registry(temp_db, "Unique Registry Co")
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         temp_db.execute(
             """INSERT INTO unconfirmed_match_queue
                (source_name, source_entity_name, candidate_registry_id,

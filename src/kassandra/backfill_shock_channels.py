@@ -9,6 +9,7 @@ Run: python -m kassandra.backfill_shock_channels
 
 import logging
 import sqlite3
+
 from kassandra.shock_channel import populate_edge_attributes
 
 logger = logging.getLogger(__name__)
@@ -115,9 +116,9 @@ def main():
 
     # Verify
     total = db.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
-    populated = db.execute(
-        "SELECT COUNT(*) FROM edges WHERE shock_channel IS NOT NULL"
-    ).fetchone()[0]
+    populated = db.execute("SELECT COUNT(*) FROM edges WHERE shock_channel IS NOT NULL").fetchone()[
+        0
+    ]
     print(f"Populated: {populated}/{total} edges")
 
     # Show distribution

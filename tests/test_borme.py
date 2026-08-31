@@ -4,7 +4,6 @@ import sqlite3
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
 
 def _make_db(extra_registry_rows: list[tuple[str, str]] | None = None) -> sqlite3.Connection:
@@ -132,6 +131,7 @@ MOCK_BORME_ENTRIES = [
 
 # ── Matching tests ───────────────────────────────────────────────────────────
 
+
 def test_notice_matches_company_basic():
     from kassandra.sources.borme import _notice_matches_company
 
@@ -195,6 +195,7 @@ def test_notice_matches_single_distinctive_token():
 
 
 # ── Classification tests ──────────────────────────────────────────────────────
+
 
 def test_classify_liquidacion():
     from kassandra.sources.borme import _classify_borme_notice
@@ -275,6 +276,7 @@ def test_classify_unknown():
 
 # ── Client integration tests ──────────────────────────────────────────────────
 
+
 def test_filter_notices_for_company():
     from kassandra.sources.borme import BorMeClient
 
@@ -285,7 +287,9 @@ def test_filter_notices_for_company():
     assert len(matches) == 1
     assert "INDITEX" in matches[0]["title"]
 
-    matches = client.filter_notices_for_company("LABORATORIOS INGENIERIA Y CONSTRUCCION S.A.", entries)
+    matches = client.filter_notices_for_company(
+        "LABORATORIOS INGENIERIA Y CONSTRUCCION S.A.", entries
+    )
     assert len(matches) == 1
     assert "INGENIERIA" in matches[0]["title"]
 
@@ -312,13 +316,15 @@ def test_process_notices_stores_evidence_and_events():
     ]
 
     collected = client.process_notices_for_company(
-        db=db, registry_id=2, company_name="LABORATORIOS INGENIERIA Y CONSTRUCCION S.A.",
+        db=db,
+        registry_id=2,
+        company_name="LABORATORIOS INGENIERIA Y CONSTRUCCION S.A.",
         notices=notices,
     )
 
     assert collected.new_evidence == 1
     assert collected.events_created == 0  # ambiguous → queued, not an event
-    assert collected.unconfirmed >= 1     # routed to unconfirmed_match_queue
+    assert collected.unconfirmed >= 1  # routed to unconfirmed_match_queue
 
     # Verify evidence stored
     evidence_count = db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
@@ -334,9 +340,7 @@ def test_process_notices_stores_evidence_and_events():
     assert event_count == 0, "ambiguous match must not create an event"
 
     # Verify queue entry
-    queue_row = db.execute(
-        "SELECT * FROM unconfirmed_match_queue LIMIT 1"
-    ).fetchone()
+    queue_row = db.execute("SELECT * FROM unconfirmed_match_queue LIMIT 1").fetchone()
     assert queue_row is not None
     assert queue_row["source_name"] == "borme_es"
     assert queue_row["status"] == "pending"
@@ -357,22 +361,23 @@ def test_process_notices_restructuring_event():
     ]
 
     collected = client.process_notices_for_company(
-        db=db, registry_id=1, company_name="INDITEX SA", notices=notices,
+        db=db,
+        registry_id=1,
+        company_name="INDITEX SA",
+        notices=notices,
     )
 
     assert collected.new_evidence == 1
     assert collected.events_created == 1
 
-    event = db.execute(
-        "SELECT event_type, severity FROM events LIMIT 1"
-    ).fetchone()
+    event = db.execute("SELECT event_type, severity FROM events LIMIT 1").fetchone()
     assert event["event_type"] == "restructuring"
     assert event["severity"] == "medium"
 
 
 def test_fetch_feed_mocked():
     """fetch_feed makes HTTP call and parses RSS response."""
-    from kassandra.sources.borme import BorMeClient, BORME_RSS_FEED
+    from kassandra.sources.borme import BORME_RSS_FEED, BorMeClient
 
     client = BorMeClient()
 
@@ -421,7 +426,9 @@ def test_collect_for_company_integration():
 
     with patch.object(client, "fetch_feed", return_value=MOCK_BORME_ENTRIES):
         collected = client.collect_for_company(
-            db=db, registry_id=1, company_name="INDITEX SA",
+            db=db,
+            registry_id=1,
+            company_name="INDITEX SA",
         )
 
     assert collected.new_evidence >= 1
@@ -432,9 +439,7 @@ def test_collect_for_company_integration():
     assert evidence_count >= 1
 
     # Verify event stored
-    event = db.execute(
-        "SELECT event_type, severity FROM events LIMIT 1"
-    ).fetchone()
+    event = db.execute("SELECT event_type, severity FROM events LIMIT 1").fetchone()
     assert event["event_type"] == "restructuring"
     assert event["severity"] == "medium"
 
@@ -462,6 +467,7 @@ def test_transformacion_classification():
 
 
 # ── Identifier-first policy regression tests ───────────────────────────
+
 
 def _make_db_borme_regression() -> sqlite3.Connection:
     """DB with ES companies, some with CIF/NIF."""
@@ -547,7 +553,10 @@ def test_borme_non_spanish_jurisdiction_rejected():
         description="Restructuring announcement.",
     )
     result = _match_notice_to_registry(
-        db, entry, "DEUTSCHE BANK AG", registry_id=3,
+        db,
+        entry,
+        "DEUTSCHE BANK AG",
+        registry_id=3,
     )
     assert result.is_rejected, f"Expected rejected for DE jurisdiction, got {result.status}"
 
@@ -562,10 +571,15 @@ def test_borme_with_cif_requires_cif_in_notice():
         description="Reducción de capital social.",
     )
     result = _match_notice_to_registry(
-        db, entry, "INDITEX SA", registry_id=1,
+        db,
+        entry,
+        "INDITEX SA",
+        registry_id=1,
     )
     # INDITEX SA has known CIF A15075062, notice has no CIF → rejected
-    assert result.is_rejected, f"Expected rejected (no CIF in notice), got {result.status}: {result.reason}"
+    assert result.is_rejected, (
+        f"Expected rejected (no CIF in notice), got {result.status}: {result.reason}"
+    )
 
 
 def test_borme_genuine_cif_match_still_works():
@@ -578,9 +592,14 @@ def test_borme_genuine_cif_match_still_works():
         description="Reducción de capital social.",
     )
     result = _match_notice_to_registry(
-        db, entry, "INDITEX SA", registry_id=1,
+        db,
+        entry,
+        "INDITEX SA",
+        registry_id=1,
     )
-    assert result.is_confirmed, f"Expected confirmed CIF match, got {result.status}: {result.reason}"
+    assert result.is_confirmed, (
+        f"Expected confirmed CIF match, got {result.status}: {result.reason}"
+    )
 
 
 def test_borme_exact_name_still_confirms_for_no_cif_company():
@@ -593,10 +612,15 @@ def test_borme_exact_name_still_confirms_for_no_cif_company():
         description="Disolución de la sociedad.",
     )
     result = _match_notice_to_registry(
-        db, entry, "LABORATORIOS INGENIERIA Y CONSTRUCCION S.A.", registry_id=2,
+        db,
+        entry,
+        "LABORATORIOS INGENIERIA Y CONSTRUCCION S.A.",
+        registry_id=2,
     )
     # No CIF known → exact name should confirm
-    assert result.is_confirmed, f"Expected confirmed exact name, got {result.status}: {result.reason}"
+    assert result.is_confirmed, (
+        f"Expected confirmed exact name, got {result.status}: {result.reason}"
+    )
 
 
 def test_borme_multi_entity_notice_dedup():

@@ -5,25 +5,39 @@ source freshness, adverse events, evidence links, graph paths,
 confidence, unknowns, and score changes.
 """
 
+import hmac
+import html as html_lib
+import http.cookies
 import http.server
+import importlib.metadata
 import json
 import logging
+import secrets
 import sqlite3
 import urllib.parse
 
 from kassandra.db import get_db
 
 logger = logging.getLogger(__name__)
+MAX_REQUEST_TARGET = 8192
+MAX_QUERY_INTEGER = 2**63 - 1
 
 
-def run_dashboard(port: int = 8765) -> None:
-    """Start the local dashboard HTTP server."""
+def run_dashboard(port: int = 8765, token: str | None = None) -> None:
+    """Start an authenticated dashboard bound to loopback only."""
+    dashboard_token = token or secrets.token_urlsafe(32)
+    if len(dashboard_token) < 32:
+        raise ValueError("dashboard token must contain at least 32 characters")
     db = get_db()
     server = http.server.HTTPServer(
         ("127.0.0.1", port),
-        lambda *args: DashboardHandler(db, *args),
+        lambda *args: DashboardHandler(db, dashboard_token, *args),
     )
-    logger.info(f"Dashboard listening on http://127.0.0.1:{port}")
+    logger.info(
+        "Dashboard listening on http://127.0.0.1:%s/?token=%s",
+        port,
+        dashboard_token,
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -31,38 +45,69 @@ def run_dashboard(port: int = 8765) -> None:
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
-
-    def __init__(self, db: sqlite3.Connection, *args, **kwargs):
+    def __init__(self, db: sqlite3.Connection, token: str, *args, **kwargs):
         self.db = db
+        self._dashboard_token = token
         super().__init__(*args, **kwargs)
 
     def do_GET(self) -> None:
+        if len(self.path) > MAX_REQUEST_TARGET:
+            self._serve_json({"error": "request target too long"}, 414)
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        params = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+
+        supplied_tokens = params.get("token", [])
+        if path == "/" and supplied_tokens:
+            if len(supplied_tokens) == 1 and hmac.compare_digest(
+                supplied_tokens[0], self._dashboard_token
+            ):
+                self.send_response(303)
+                self.send_header(
+                    "Set-Cookie",
+                    f"kassandra_dashboard={self._dashboard_token}; HttpOnly; "
+                    "SameSite=Strict; Path=/",
+                )
+                self._common_security_headers()
+                self.send_header("Location", "/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self._serve_json({"error": "unauthorized"}, 401)
+            return
+        if not self._authorized():
+            self._serve_json({"error": "unauthorized"}, 401)
+            return
 
         if path == "/":
-            self._serve_html(self._index_html())
+            nonce = secrets.token_urlsafe(24)
+            self._serve_html(self._index_html(nonce), nonce=nonce)
         elif path == "/api/companies":
             self._serve_json(self._get_companies())
         elif path == "/api/company":
-            params = urllib.parse.parse_qs(parsed.query)
-            reg_id = params.get("id", [None])[0]
-            self._serve_json(
-                self._get_company_detail(int(reg_id)) if reg_id
-                else {"error": "missing id"}, 400 if not reg_id else 200
-            )
+            reg_id = self._query_int(params, "id")
+            if reg_id is None:
+                self._serve_json({"error": "id must be an integer"}, 400)
+            else:
+                self._serve_json(self._get_company_detail(reg_id))
         elif path == "/api/scores":
             self._serve_json(self._get_scores())
         elif path == "/api/events":
-            params = urllib.parse.parse_qs(parsed.query)
-            reg_id = params.get("registry_id", [None])[0]
-            self._serve_json(self._get_events(reg_id))
+            has_registry_id = "registry_id" in params
+            reg_id = self._query_int(params, "registry_id") if has_registry_id else None
+            if has_registry_id and reg_id is None:
+                self._serve_json({"error": "registry_id must be an integer"}, 400)
+            else:
+                self._serve_json(self._get_events(reg_id))
         elif path == "/api/sources":
             self._serve_json(self._get_sources())
         elif path == "/api/graph":
-            params = urllib.parse.parse_qs(parsed.query)
-            reg_id = params.get("id", [None])[0]
-            self._serve_json(self._get_graph(reg_id))
+            reg_id = self._query_int(params, "id")
+            if "id" in params and reg_id is None:
+                self._serve_json({"error": "id must be an integer"}, 400)
+            else:
+                self._serve_json(self._get_graph(str(reg_id) if reg_id is not None else None))
         elif path == "/api/observability":
             self._serve_json(self._get_observability())
         elif path == "/api/coverage":
@@ -70,27 +115,81 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         else:
             self._serve_json({"error": "not found"}, 404)
 
-    def _serve_html(self, html: str, status: int = 200) -> None:
+    def _authorized(self) -> bool:
+        raw = self.headers.get("Cookie")
+        if not raw:
+            return False
+        cookie = http.cookies.SimpleCookie()
+        try:
+            cookie.load(raw)
+        except http.cookies.CookieError:
+            return False
+        morsel = cookie.get("kassandra_dashboard")
+        return morsel is not None and hmac.compare_digest(morsel.value, self._dashboard_token)
+
+    @staticmethod
+    def _query_int(params: dict[str, list[str]], name: str) -> int | None:
+        values = params.get(name, [])
+        if len(values) != 1:
+            return None
+        raw = values[0]
+        if not raw or len(raw) > 19 or not raw.isascii() or not raw.isdigit():
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if 0 < value <= MAX_QUERY_INTEGER else None
+
+    def _common_security_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cross-Origin-Opener-Policy", "same-origin")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header(
+            "Permissions-Policy", "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+        )
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("X-Permitted-Cross-Domain-Policies", "none")
+
+    def _serve_html(self, content: str, status: int = 200, *, nonce: str) -> None:
+        body = content.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; base-uri 'none'; connect-src 'self'; "
+            "frame-ancestors 'none'; form-action 'none'; img-src 'self' data:; "
+            f"script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}' 'unsafe-inline'",
+        )
+        self._common_security_headers()
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(html.encode("utf-8"))
+        self.wfile.write(body)
 
     def _serve_json(self, data: object, status: int = 200) -> None:
+        body = json.dumps(data, default=str, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        self._common_security_headers()
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(json.dumps(data, default=str).encode("utf-8"))
+        self.wfile.write(body)
 
-    def _index_html(self) -> str:
+    def _index_html(self, nonce: str) -> str:
+        try:
+            release = importlib.metadata.version("kassandra")
+        except importlib.metadata.PackageNotFoundError:
+            release = "development"
         return """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kassandra — Investigation Dashboard</title>
-<style>
+<style nonce="__CSP_NONCE__">
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, system-ui, sans-serif; margin: 0; padding: 1rem;
@@ -139,17 +238,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 <body>
 <h1>⚕ Kassandra</h1>
 <p style="color:#888;font-size:0.85rem;margin:0">
-  Corporate early-warning — investigation dashboard | 50 portfolio companies | v0.3.0-dev
+  Corporate early-warning — investigation dashboard | experimental research software | v__VERSION__
 </p>
 <div class="nav">
-  <button onclick="loadCompanies()" id="nav-companies">Companies</button>
-  <button onclick="loadScores()" id="nav-scores">Scores</button>
-  <button onclick="loadSources()" id="nav-sources">Source Health</button>
-  <button onclick="loadObservability()" id="nav-obs">Observability</button>
-  <button onclick="loadCoverage()" id="nav-cov">Coverage</button>
+  <button data-view="companies" id="nav-companies">Companies</button>
+  <button data-view="scores" id="nav-scores">Scores</button>
+  <button data-view="sources" id="nav-sources">Source Health</button>
+  <button data-view="observability" id="nav-obs">Observability</button>
+  <button data-view="coverage" id="nav-cov">Coverage</button>
 </div>
 <div id="content"><p>Loading...</p></div>
-<script>
+<script nonce="__CSP_NONCE__">
 function setActive(id) {
   document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
   document.getElementById(id)?.classList.add('active');
@@ -162,14 +261,14 @@ async function loadCompanies() {
   let html = `<h2>Portfolio Companies</h2>
     <table><tr><th>Company</th><th>Events</th><th>Dependencies</th><th>Mat Known?</th><th>Priority</th></tr>`;
   for (const c of data) {
-    const sev = c.max_severity || 'none';
+    const sev = severityClass(c.max_severity);
     const matLabel = c.materiality_known ? '' : ' <span class="tag tag-unknown">defaults</span>';
     html += `<tr>
-      <td><a href="javascript:showCompany(${c.id})">${esc(c.canonical_name)}</a></td>
-      <td>${c.event_count}</td>
-      <td>${c.edge_count || '-'}</td>
+      <td><button class="company-link" data-company-id="${integerText(c.id, '0')}">${esc(c.canonical_name)}</button></td>
+      <td>${integerText(c.event_count)}</td>
+      <td>${integerText(c.edge_count, '-')}</td>
       <td>${c.materiality_known ? '✓' : matLabel}</td>
-      <td><span class="${sev}">${c.analyst_priority?.toFixed(3) || '-'}</span></td>
+      <td><span class="${sev}">${decimalText(c.analyst_priority, 3)}</span></td>
     </tr>`;
   }
   html += '</table>';
@@ -185,16 +284,16 @@ async function loadScores() {
     <table>
     <tr><th>Company</th><th>Events</th><th>Signal</th><th>Exposure</th><th>Materiality</th><th>Priority</th><th>Explanation</th></tr>`;
   for (const s of data) {
-    const matNote = s.materiality_known ? s.materiality_score?.toFixed(2) : '<span class="tag tag-unknown">unknown</span>';
+    const matNote = s.materiality_known ? decimalText(s.materiality_score, 2, '?') : '<span class="tag tag-unknown">unknown</span>';
     html += `<tr>
       <td>${esc(s.canonical_name)}</td>
-      <td>${s.event_count}</td>
-      <td>${s.signal_score?.toFixed(3) || '0'}</td>
-      <td>${s.legal_ownership_exposure?.toFixed(0) || '0'}</td>
+      <td>${integerText(s.event_count)}</td>
+      <td>${decimalText(s.signal_score, 3, '0')}</td>
+      <td>${decimalText(s.legal_ownership_exposure, 0, '0')}</td>
       <td>${matNote}</td>
       <td>
-        <div class="bar-bg"><div class="bar" style="width:${(s.analyst_priority||0)*100}%"></div></div>
-        ${(s.analyst_priority||0).toFixed(3)}
+        <div class="bar-bg"><div class="bar" style="width:${percent(s.analyst_priority)}%"></div></div>
+        ${decimalText(s.analyst_priority, 3, '0')}
       </td>
       <td style="font-size:0.75rem;max-width:300px">${esc(s.explanation || '-')}</td>
     </tr>`;
@@ -214,20 +313,20 @@ async function showCompany(id) {
   if (c.error) { document.getElementById('content').innerHTML = '<p>Not found</p>'; return; }
   let html = `<h2>${esc(c.canonical_name)}</h2>
     <div class="card">
-      <span class="stat"><span class="stat-label">Events</span><br><span class="stat-val">${c.events?.length || 0}</span></span>
-      <span class="stat"><span class="stat-label">Legal Ownership Edges</span><br><span class="stat-val">${g.edge_count || 0}${g.graph_capped ? ' ⚠' : ''}</span></span>
-      <span class="stat"><span class="stat-label">Exposure</span><br><span class="stat-val">${g.exposure || 0}</span></span>
+      <span class="stat"><span class="stat-label">Events</span><br><span class="stat-val">${integerText(c.events?.length)}</span></span>
+      <span class="stat"><span class="stat-label">Legal Ownership Edges</span><br><span class="stat-val">${integerText(g.edge_count)}${g.graph_capped ? ' ⚠' : ''}</span></span>
+      <span class="stat"><span class="stat-label">Exposure</span><br><span class="stat-val">${decimalText(g.exposure, 2, '0')}</span></span>
       <span class="stat"><span class="stat-label">Materiality</span><br><span class="stat-val">${g.materiality_known ? 'known' : '<span class="tag tag-unknown">unknown</span>'}</span></span>
     </div>`;
 
   // Events
-  html += `<h3>Events (${c.events?.length || 0})</h3>`;
+  html += `<h3>Events (${integerText(c.events?.length)})</h3>`;
   if (c.events?.length) {
     for (const e of c.events) {
       html += `<div class="card">
-        <span class="tag tag-${e.severity || 'low'}">${e.severity}</span>
-        <strong>${e.event_type}</strong> — ${esc(e.description || '')}
-        <br><small>${e.extracted_at} | conf: ${e.confidence?.toFixed(2)}</small>
+        <span class="tag tag-${severityClass(e.severity)}">${esc(e.severity || 'unknown')}</span>
+        <strong>${esc(e.event_type || 'unknown')}</strong> — ${esc(e.description || '')}
+        <br><small>${esc(e.extracted_at || '')} | conf: ${decimalText(e.confidence, 2)}</small>
       </div>`;
     }
   } else {
@@ -239,21 +338,21 @@ async function showCompany(id) {
   const corrCount = g.legal_edges?.filter(e => e.validation === 'annual_report_corroborated').length || 0;
   html += `<h3>Dependency Graph</h3>
     <div class="card">
-      <span class="stat"><span class="stat-label">Legal Edges (GLEIF)</span><br><span class="stat-val">${g.edge_count || 0}${g.graph_capped ? ' ⚠' : ''}</span></span>
-      <span class="stat"><span class="stat-label">Corroborated</span><br><span class="stat-val">${corrCount}</span></span>
-      <span class="stat"><span class="stat-label">Economic Edges</span><br><span class="stat-val">${ecoEdges.length}</span></span>
+      <span class="stat"><span class="stat-label">Legal Edges (GLEIF)</span><br><span class="stat-val">${integerText(g.edge_count)}${g.graph_capped ? ' ⚠' : ''}</span></span>
+      <span class="stat"><span class="stat-label">Corroborated</span><br><span class="stat-val">${integerText(corrCount)}</span></span>
+      <span class="stat"><span class="stat-label">Economic Edges</span><br><span class="stat-val">${integerText(ecoEdges.length)}</span></span>
       <span class="stat"><span class="stat-label">Materiality</span><br><span class="stat-val">${g.materiality_known ? 'estimated' : '<span class=\"tag tag-unknown\">none</span>'}</span></span>
     </div>`;
 
   // Economic dependencies
   if (ecoEdges.length) {
-    html += `<h4>Economic Dependencies (${ecoEdges.length})</h4>
+    html += `<h4>Economic Dependencies (${integerText(ecoEdges.length)})</h4>
       <p class="explanation">Automated extraction from annual reports. Customer, supplier, facility, commodity, operational.</p>
       <table><tr><th>Entity</th><th>Type</th><th>Evidence</th></tr>`;
     for (const e of ecoEdges.slice(0, 20)) {
       html += `<tr>
         <td>${esc(e.name)}</td>
-        <td><span class="tag tag-${e.type === 'supplier' ? 'high' : 'medium'}">${e.type}</span></td>
+        <td><span class="tag tag-${e.type === 'supplier' ? 'high' : 'medium'}">${esc(e.type || 'unknown')}</span></td>
         <td style="font-size:0.7rem;max-width:300px">${esc(e.description?.substring(0, 100) || '')}</td>
       </tr>`;
     }
@@ -261,26 +360,26 @@ async function showCompany(id) {
   }
 
   // Legal ownership edges
-  html += `<h4>Legal Ownership Edges (${g.edge_count || 0})</h4>
+  html += `<h4>Legal Ownership Edges (${integerText(g.edge_count)})</h4>
     <p class="explanation">GLEIF parent/subsidiary relationships. Materiality is proxy-estimated from corroboration level.</p>`;
   if (g.legal_edges?.length) {
     html += '<table><tr><th>Entity</th><th>Type</th><th>Confidence</th><th>Materiality</th></tr>';
     for (const e of g.legal_edges.slice(0, 30)) {
       html += `<tr>
         <td>${esc(e.target)}</td>
-        <td>${e.type}</td>
-        <td>${e.confidence?.toFixed(2) || '?'}</td>
-        <td>${e.materiality != null ? e.materiality.toFixed(2) : '<span class="tag tag-unknown">unknown</span>'}</td>
+        <td>${esc(e.type || 'unknown')}</td>
+        <td>${decimalText(e.confidence, 2, '?')}</td>
+        <td>${e.materiality != null ? decimalText(e.materiality, 2, '?') : '<span class="tag tag-unknown">unknown</span>'}</td>
       </tr>`;
     }
-    if (g.edges.length > 30) html += `<tr><td colspan="4" style="color:#888">... and ${g.edges.length - 30} more</td></tr>`;
+    if (g.legal_edges.length > 30) html += `<tr><td colspan="4" style="color:#888">... and ${integerText(g.legal_edges.length - 30)} more</td></tr>`;
     html += '</table>';
     html += `<p class="explanation">${esc(g.explanation || '')}</p>`;
   } else {
     html += '<p style="color:#888">No legal ownership data.</p>';
   }
 
-  html += '<p><a href="javascript:loadCompanies()">← Back</a></p>';
+  html += '<p><button data-view="companies">← Back</button></p>';
   document.getElementById('content').innerHTML = html;
 }
 
@@ -293,10 +392,10 @@ async function loadSources() {
     const cls = s.status === 'active' ? 'active' : (s.status === 'degraded' ? 'degraded' : 'disabled');
     const lastSuccess = s.last_success_at ? s.last_success_at.substring(0, 16) : 'never';
     html += `<div class="source-card ${cls}">
-      <strong>${s.source_name}</strong>
-      <div>${s.source_type} · ${s.status}</div>
-      <div>Evidence: ${s.total_evidence} | Failures: ${s.consecutive_failures}</div>
-      <div style="font-size:0.7rem;color:#888">Last ok: ${lastSuccess}</div>
+      <strong>${esc(s.source_name)}</strong>
+      <div>${esc(s.source_type)} · ${esc(s.status)}</div>
+      <div>Evidence: ${integerText(s.total_evidence)} | Failures: ${integerText(s.consecutive_failures)}</div>
+      <div style="font-size:0.7rem;color:#888">Last ok: ${esc(lastSuccess)}</div>
     </div>`;
   }
   html += '</div>';
@@ -315,12 +414,12 @@ async function loadObservability() {
     for (const s of data.source_health) {
       const last = s.last_success_at ? s.last_success_at.substring(0, 16) : 'never';
       html += `<tr>
-        <td>${s.source_name}</td>
-        <td class="${s.status === 'active' ? '' : 'critical'}">${s.status}</td>
-        <td>${s.total_evidence}</td>
-        <td>${s.unique_events}</td>
-        <td>${last}</td>
-        <td>${s.consecutive_failures}</td>
+        <td>${esc(s.source_name)}</td>
+        <td class="${s.status === 'active' ? '' : 'critical'}">${esc(s.status)}</td>
+        <td>${integerText(s.total_evidence)}</td>
+        <td>${integerText(s.unique_events)}</td>
+        <td>${esc(last)}</td>
+        <td>${integerText(s.consecutive_failures)}</td>
       </tr>`;
     }
     html += '</table>';
@@ -329,9 +428,9 @@ async function loadObservability() {
   if (data.latest_run) {
     html += `<h3>Latest Run</h3>
       <div class="card">
-        <span class="stat"><span class="stat-label">Job</span><br><span class="stat-val">${data.latest_run.job_name}</span></span>
-        <span class="stat"><span class="stat-label">Status</span><br><span class="stat-val ${data.latest_run.status === 'completed' ? '' : 'critical'}">${data.latest_run.status}</span></span>
-        <span class="stat"><span class="stat-label">Last Run</span><br><span class="stat-val" style="font-size:0.9rem">${data.latest_run.last_run_at?.substring(0, 19) || 'never'}</span></span>
+        <span class="stat"><span class="stat-label">Job</span><br><span class="stat-val">${esc(data.latest_run.job_name)}</span></span>
+        <span class="stat"><span class="stat-label">Status</span><br><span class="stat-val ${data.latest_run.status === 'completed' ? '' : 'critical'}">${esc(data.latest_run.status)}</span></span>
+        <span class="stat"><span class="stat-label">Last Run</span><br><span class="stat-val" style="font-size:0.9rem">${esc(data.latest_run.last_run_at?.substring(0, 19) || 'never')}</span></span>
       </div>`;
   }
 
@@ -342,8 +441,8 @@ async function loadObservability() {
       let details = '';
       try { details = JSON.stringify(JSON.parse(j.details || '{}')).substring(0, 120); } catch(e) {}
       html += `<tr>
-        <td style="font-size:0.75rem">${j.timestamp?.substring(0, 19) || ''}</td>
-        <td>${j.action}</td>
+        <td style="font-size:0.75rem">${esc(j.timestamp?.substring(0, 19) || '')}</td>
+        <td>${esc(j.action)}</td>
         <td style="font-size:0.7rem;color:#888">${esc(details)}</td>
       </tr>`;
     }
@@ -359,22 +458,22 @@ async function loadCoverage() {
   const data = await resp.json();
   let html = `<h2>Source Coverage Matrix</h2>
     <div class="card">
-      <span class="stat"><span class="stat-label">Portfolio</span><br><span class="stat-val">${data.total}</span></span>
-      <span class="stat"><span class="stat-label">GLEIF (legal)</span><br><span class="stat-val">${data.with_lei}</span></span>
-      <span class="stat"><span class="stat-label">RSS Feeds</span><br><span class="stat-val">${data.with_feed}</span></span>
-      <span class="stat"><span class="stat-label">Annual Reports</span><br><span class="stat-val">${data.with_annual_report}</span></span>
-      <span class="stat"><span class="stat-label">Web Monitor</span><br><span class="stat-val">${data.web_only}</span></span>
-      <span class="stat"><span class="stat-label">Unreachable</span><br><span class="stat-val">${data.gap}</span></span>
+      <span class="stat"><span class="stat-label">Portfolio</span><br><span class="stat-val">${integerText(data.total)}</span></span>
+      <span class="stat"><span class="stat-label">GLEIF (legal)</span><br><span class="stat-val">${integerText(data.with_lei)}</span></span>
+      <span class="stat"><span class="stat-label">RSS Feeds</span><br><span class="stat-val">${integerText(data.with_feed)}</span></span>
+      <span class="stat"><span class="stat-label">Annual Reports</span><br><span class="stat-val">${integerText(data.with_annual_report)}</span></span>
+      <span class="stat"><span class="stat-label">Web Monitor</span><br><span class="stat-val">${integerText(data.web_only)}</span></span>
+      <span class="stat"><span class="stat-label">Unreachable</span><br><span class="stat-val">${integerText(data.gap)}</span></span>
     </div>`;
 
   // Per-source breakdown
   html += '<table><tr><th>Source</th><th>Companies</th><th>Coverage</th><th>Bar</th></tr>';
   for (const s of data.sources) {
-    const pct = (s.count / data.total * 100).toFixed(0);
+    const pct = data.total > 0 ? percent(s.count / data.total) : 0;
     html += `<tr>
-      <td>${s.name}</td>
-      <td>${s.count}</td>
-      <td>${pct}%</td>
+      <td>${esc(s.name)}</td>
+      <td>${integerText(s.count)}</td>
+      <td>${decimalText(pct, 2, '0')}%</td>
       <td><div class=\"bar-bg\"><div class=\"bar\" style=\"width:${pct}%\"></div></div></td>
     </tr>`;
   }
@@ -400,13 +499,62 @@ async function loadCoverage() {
 
 function esc(s) {
   if (!s) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
 }
+
+function integerText(value, fallback = '0') {
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 0 ? String(number) : fallback;
+}
+
+function decimalText(value, digits, fallback = '-') {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(digits) : fallback;
+}
+
+function severityClass(value) {
+  return ['critical', 'high', 'medium', 'low'].includes(value) ? value : 'unknown';
+}
+
+function percent(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.max(0, Math.min(100, number * 100));
+}
+
+const views = {
+  companies: loadCompanies,
+  scores: loadScores,
+  sources: loadSources,
+  observability: loadObservability,
+  coverage: loadCoverage,
+};
+document.addEventListener('click', event => {
+  if (!(event.target instanceof Element)) return;
+  const viewTarget = event.target.closest('[data-view]');
+  if (viewTarget && views[viewTarget.dataset.view]) {
+    event.preventDefault();
+    views[viewTarget.dataset.view]();
+    return;
+  }
+  const companyTarget = event.target.closest('[data-company-id]');
+  if (companyTarget) {
+    const id = Number(companyTarget.dataset.companyId);
+    if (Number.isInteger(id) && id > 0) showCompany(id);
+  }
+});
 
 loadCompanies();
 </script>
 </body>
-</html>"""
+</html>""".replace("__CSP_NONCE__", html_lib.escape(nonce, quote=True)).replace(
+            "__VERSION__", html_lib.escape(release, quote=True)
+        )
 
     def _get_companies(self) -> list[dict]:
         rows = self.db.execute("""
@@ -426,23 +574,21 @@ loadCompanies();
         result = []
         for r in rows:
             d = dict(r)
-            d["materiality_known"] = (
-                d.get("has_materiality") is not None
-                and float(d["has_materiality"] or 0) not in (0.8, 0.6, 0.5, 0.3, 0.2, 0)
-            )
+            d["materiality_known"] = d.get("has_materiality") is not None and float(
+                d["has_materiality"] or 0
+            ) not in (0.8, 0.6, 0.5, 0.3, 0.2, 0)
             result.append(d)
         return result
 
     def _get_company_detail(self, reg_id: int) -> dict:
-        row = self.db.execute(
-            "SELECT * FROM registry WHERE id = ?", (reg_id,)
-        ).fetchone()
+        row = self.db.execute("SELECT * FROM registry WHERE id = ?", (reg_id,)).fetchone()
         if not row:
             return {"error": "not found"}
         events = self.db.execute(
             """SELECT * FROM events WHERE registry_id = ?
                AND active = 1 AND status = 'active'
-               ORDER BY extracted_at DESC""", (reg_id,)
+               ORDER BY extracted_at DESC""",
+            (reg_id,),
         ).fetchall()
         result = dict(row)
         result["events"] = [dict(e) for e in events]
@@ -476,14 +622,20 @@ loadCompanies();
             result.append(d)
         return result
 
-    def _get_events(self, registry_id: str | None = None) -> list[dict]:
-        if registry_id:
+    def _get_events(self, registry_id: str | int | None = None) -> list[dict]:
+        if registry_id is not None:
+            try:
+                registry_key = int(registry_id)
+            except (TypeError, ValueError, OverflowError):
+                return []
+            if not 0 < registry_key <= MAX_QUERY_INTEGER:
+                return []
             rows = self.db.execute(
                 """SELECT e.*, r.canonical_name
                    FROM events e JOIN registry r ON e.registry_id = r.id
                    WHERE e.registry_id = ? AND e.active = 1 AND e.status = 'active'
                    ORDER BY e.extracted_at DESC""",
-                (int(registry_id),),
+                (registry_key,),
             ).fetchall()
         else:
             rows = self.db.execute(
@@ -500,7 +652,11 @@ loadCompanies();
 
     def _get_graph(self, registry_id: str | None = None) -> dict:
         if registry_id:
-            from kassandra.scoring import compute_legal_ownership_exposure_for_company, _is_graph_capped
+            from kassandra.scoring import (
+                _is_graph_capped,
+                compute_legal_ownership_exposure_for_company,
+            )
+
             result = compute_legal_ownership_exposure_for_company(self.db, int(registry_id))
             result["graph_capped"] = _is_graph_capped(self.db, int(registry_id))
 
@@ -516,8 +672,11 @@ loadCompanies();
                 (int(registry_id),),
             ).fetchall()
             result["economic_edges"] = [
-                {"name": r["canonical_name"], "type": r["entity_type"],
-                 "description": r["description"]}
+                {
+                    "name": r["canonical_name"],
+                    "type": r["entity_type"],
+                    "description": r["description"],
+                }
                 for r in eco_rows
             ]
             return result
@@ -538,13 +697,17 @@ loadCompanies();
         }
 
     def _get_observability(self) -> dict:
-        from kassandra.observability import get_source_health_report, get_latest_run
+        from kassandra.observability import get_latest_run, get_source_health_report
+
         return {
             "source_health": get_source_health_report(self.db),
             "latest_run": get_latest_run(self.db),
-            "journal": self.db.execute(
-                "SELECT * FROM journal ORDER BY id DESC LIMIT 30"
-            ).fetchall(),
+            "journal": [
+                dict(row)
+                for row in self.db.execute(
+                    "SELECT * FROM journal ORDER BY id DESC LIMIT 30"
+                ).fetchall()
+            ],
         }
 
     def _get_coverage(self) -> dict:
@@ -555,13 +718,11 @@ loadCompanies();
         with_lei = self.db.execute(
             "SELECT COUNT(*) FROM registry WHERE lei IS NOT NULL AND domain IS NOT NULL"
         ).fetchone()[0]
-        with_feed = self.db.execute(
-            "SELECT COUNT(*) FROM registry WHERE feed_url IS NOT NULL AND domain IS NOT NULL"
-        ).fetchone()[0]
         with_annual = self.db.execute(
             "SELECT COUNT(DISTINCT registry_id) FROM economic_entities WHERE registry_id IS NOT NULL AND entity_type != 'jurisdiction'"
         ).fetchone()[0]
         from kassandra.sources.known_feeds import KNOWN_FEEDS, NO_FEED_ISINS
+
         web_only = total - len(KNOWN_FEEDS) - len(NO_FEED_ISINS)
 
         sources = [
@@ -569,9 +730,12 @@ loadCompanies();
             {"name": "Known RSS feeds", "count": len(KNOWN_FEEDS)},
             {"name": "Web monitor (homepage+IR)", "count": web_only},
             {"name": "Annual report extraction", "count": with_annual},
-            {"name": "Companies House (UK)", "count": self.db.execute(
-                "SELECT COUNT(*) FROM registry WHERE companies_house_number IS NOT NULL AND domain IS NOT NULL"
-            ).fetchone()[0]},
+            {
+                "name": "Companies House (UK)",
+                "count": self.db.execute(
+                    "SELECT COUNT(*) FROM registry WHERE companies_house_number IS NOT NULL AND domain IS NOT NULL"
+                ).fetchone()[0],
+            },
         ]
 
         # Companies with minimal coverage

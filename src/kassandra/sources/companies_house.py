@@ -4,10 +4,8 @@ Uses the Companies House REST API for lawful corporate registry lookups.
 Authentication via COMPANIES_HOUSE_API_KEY environment variable (Basic auth).
 """
 
-import hashlib
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -47,6 +45,7 @@ class CompaniesHouseClient:
     def _auth_headers(self) -> dict[str, str]:
         """Basic auth with API key as username, empty password."""
         import base64
+
         credentials = base64.b64encode(f"{self._api_key}:".encode()).decode()
         return {"Authorization": f"Basic {credentials}"}
 
@@ -61,7 +60,7 @@ class CompaniesHouseClient:
 
         self._rate_limit()
         try:
-            with httpx.Client(timeout=30) as client:
+            with httpx.Client(timeout=30, trust_env=False, follow_redirects=False) as client:
                 resp = client.get(
                     f"{BASE_URL}/search/companies",
                     params={"q": name, "items_per_page": 3},
@@ -82,7 +81,7 @@ class CompaniesHouseClient:
 
         self._rate_limit()
         try:
-            with httpx.Client(timeout=30) as client:
+            with httpx.Client(timeout=30, trust_env=False, follow_redirects=False) as client:
                 resp = client.get(
                     f"{BASE_URL}/company/{company_number}",
                     headers=self._auth_headers(),
@@ -102,7 +101,7 @@ class CompaniesHouseClient:
 
         self._rate_limit()
         try:
-            with httpx.Client(timeout=30) as client:
+            with httpx.Client(timeout=30, trust_env=False, follow_redirects=False) as client:
                 resp = client.get(
                     f"{BASE_URL}/company/{company_number}/filing-history",
                     params={"items_per_page": items_per_page},

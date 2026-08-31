@@ -8,7 +8,6 @@ Provides authoritative entity identifiers across jurisdictions.
 import json
 import logging
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -24,6 +23,8 @@ class GleifClient:
     def __init__(self) -> None:
         self._client = httpx.Client(
             timeout=30,
+            trust_env=False,
+            follow_redirects=False,
             headers={"Accept": "application/vnd.api+json"},
         )
         self._last_request: float = 0

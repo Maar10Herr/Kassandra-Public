@@ -4,6 +4,8 @@ Validates that adversarial events are detected and benign texts are not.
 Per engineering audit P2: event detection vertical slice.
 """
 
+from datetime import UTC
+
 import pytest
 
 from kassandra.classifier import classify_content
@@ -18,8 +20,7 @@ class TestClassifierAdverseDetection:
         """Each adverse case should produce at least one event."""
         events = classify_content(case["text"])
         assert len(events) > 0, (
-            f"FAIL: {case['id']} — expected at least 1 event, got 0. "
-            f"Text: {case['text'][:100]}..."
+            f"FAIL: {case['id']} — expected at least 1 event, got 0. Text: {case['text'][:100]}..."
         )
 
     @pytest.mark.parametrize("case", ADVERSE_CASES)
@@ -51,10 +52,7 @@ class TestClassifierBenignControl:
     def test_benign_no_high_severity(self, case):
         """Benign texts should not produce high/critical severity events."""
         events = classify_content(case["text"])
-        high_severity_events = [
-            e for e in events
-            if e["severity"] in ("critical", "high")
-        ]
+        high_severity_events = [e for e in events if e["severity"] in ("critical", "high")]
         assert len(high_severity_events) == 0, (
             f"FAIL: {case['id']} — expected 0 high-severity events, "
             f"got: {[(e['event_type'], e['severity']) for e in high_severity_events]}"
@@ -64,8 +62,14 @@ class TestClassifierBenignControl:
     def test_benign_no_critical_event_types(self, case):
         """Benign texts should not trigger insolvency/restructuring/etc."""
         events = classify_content(case["text"])
-        critical_types = {"insolvency", "going_concern_warning", "restructuring",
-                          "payment_stress", "regulatory_action", "cyber_incident"}
+        critical_types = {
+            "insolvency",
+            "going_concern_warning",
+            "restructuring",
+            "payment_stress",
+            "regulatory_action",
+            "cyber_incident",
+        }
         false_positives = [e for e in events if e["event_type"] in critical_types]
         assert len(false_positives) == 0, (
             f"FAIL: {case['id']} — got critical event in benign text: "
@@ -113,9 +117,16 @@ class TestClassifierMetadata:
         benign texts — this is expected for simple keyword matching.
         The key metric: high-severity false positives = 0.
         """
-        critical_types = {"insolvency", "going_concern_warning", "restructuring",
-                          "payment_stress", "regulatory_action", "cyber_incident",
-                          "refinancing_stress", "auditor_warning"}
+        critical_types = {
+            "insolvency",
+            "going_concern_warning",
+            "restructuring",
+            "payment_stress",
+            "regulatory_action",
+            "cyber_incident",
+            "refinancing_stress",
+            "auditor_warning",
+        }
         from kassandra.test_corpus import BENIGN_CASES
 
         fp_count = 0
@@ -137,11 +148,11 @@ class TestClassifierMetadata:
 
 # ── Seeded event pipeline test ────────────────────────────────────────────────
 
+
 @pytest.fixture
 def detection_test_db():
     """In-memory DB with minimal schema for detection pipeline validation."""
     import sqlite3
-    from datetime import datetime, timezone
 
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
@@ -188,7 +199,6 @@ def detection_test_db():
         );
     """)
 
-    now = datetime.now(timezone.utc).isoformat()
     db.execute(
         "INSERT INTO registry (id, canonical_name, jurisdiction, domain) "
         "VALUES (1, 'TestCorp PLC', 'GB', 'testcorp.com')"
@@ -204,11 +214,12 @@ def test_seeded_events_flow_to_scoring(detection_test_db):
     engineering audit: only 2 live events — pipeline not validated.
     """
     import hashlib
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from kassandra.classifier import classify_content
     from kassandra.test_corpus import ADVERSE_CASES
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     # 1. Store golden adverse texts as evidence
     event_count = 0
@@ -235,9 +246,16 @@ def test_seeded_events_flow_to_scoring(detection_test_db):
                    (registry_id, evidence_id, event_type, severity, confidence,
                     matched_text, pattern_id, extracted_at, created_at)
                    VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (evidence_id, ev["event_type"], ev.get("severity", "high"),
-                 ev.get("confidence", 0.8), ev.get("matched_text", text[:200]),
-                 ev.get("pattern_id", "TEST"), now, now),
+                (
+                    evidence_id,
+                    ev["event_type"],
+                    ev.get("severity", "high"),
+                    ev.get("confidence", 0.8),
+                    ev.get("matched_text", text[:200]),
+                    ev.get("pattern_id", "TEST"),
+                    now,
+                    now,
+                ),
             )
             event_count += 1
 
@@ -251,16 +269,17 @@ def test_seeded_events_flow_to_scoring(detection_test_db):
 
     # 4. Compute signal score (simplified — just verify non-zero)
     from kassandra.scoring import _compute_signal_score
+
     event_rows = [
-        dict(row) for row in detection_test_db.execute(
+        dict(row)
+        for row in detection_test_db.execute(
             "SELECT event_type, severity, confidence FROM events WHERE registry_id = 1"
         ).fetchall()
     ]
 
     signal_score, _ = _compute_signal_score(event_rows, {})
     assert signal_score > 0, (
-        f"Signal score should be >0 with {db_event_count} adverse events, "
-        f"got {signal_score}"
+        f"Signal score should be >0 with {db_event_count} adverse events, got {signal_score}"
     )
 
 
@@ -420,9 +439,15 @@ class TestHardNegativeControl:
         """
         events = classify_content(case["text"])
         critical_types = {
-            "insolvency", "restructuring", "going_concern_warning",
-            "payment_stress", "refinancing_stress", "regulatory_action",
-            "cyber_incident", "auditor_warning", "facility_closure",
+            "insolvency",
+            "restructuring",
+            "going_concern_warning",
+            "payment_stress",
+            "refinancing_stress",
+            "regulatory_action",
+            "cyber_incident",
+            "auditor_warning",
+            "facility_closure",
         }
         false_positives = [e for e in events if e["event_type"] in critical_types]
 
@@ -484,7 +509,7 @@ class TestYieldReport:
 
     def test_yield_report_structure(self):
         """Yield report must contain all required keys."""
-        from kassandra.classifier import ClassifierRun, classify_documents
+        from kassandra.classifier import classify_documents
 
         docs = [
             {"text": ADVERSE_CASES[0]["text"], "source": "gazette"},
@@ -497,9 +522,14 @@ class TestYieldReport:
 
         # Required top-level keys
         required_keys = {
-            "total_docs", "docs_with_text", "docs_skipped",
-            "candidates", "accepted", "rejected",
-            "by_source", "by_language",
+            "total_docs",
+            "docs_with_text",
+            "docs_skipped",
+            "candidates",
+            "accepted",
+            "rejected",
+            "by_source",
+            "by_language",
         }
         missing = required_keys - set(report.keys())
         assert not missing, f"Yield report missing keys: {missing}"
@@ -511,7 +541,7 @@ class TestYieldReport:
 
     def test_yield_report_counts(self):
         """Yield report counts should be consistent."""
-        from kassandra.classifier import ClassifierRun, classify_documents
+        from kassandra.classifier import classify_documents
 
         docs = [
             {"text": ADVERSE_CASES[0]["text"], "source": "gazette"},
@@ -523,7 +553,9 @@ class TestYieldReport:
         events, report = classify_documents(docs)
 
         assert report["total_docs"] == 4, f"Expected 4 total, got {report['total_docs']}"
-        assert report["docs_with_text"] == 2, f"Expected 2 with text, got {report['docs_with_text']}"
+        assert report["docs_with_text"] == 2, (
+            f"Expected 2 with text, got {report['docs_with_text']}"
+        )
         assert report["docs_skipped"] == 2, f"Expected 2 skipped, got {report['docs_skipped']}"
         assert report["accepted"] > 0, f"Expected some accepted events, got {report['accepted']}"
         assert report["candidates"] >= report["accepted"], (
@@ -532,7 +564,7 @@ class TestYieldReport:
 
     def test_yield_report_by_source(self):
         """Yield report per-source breakdown should be correct."""
-        from kassandra.classifier import ClassifierRun, classify_documents
+        from kassandra.classifier import classify_documents
 
         docs = [
             {"text": ADVERSE_CASES[0]["text"], "source": "gazette"},
@@ -544,7 +576,7 @@ class TestYieldReport:
 
         by_source = report["by_source"]
         assert "gazette" in by_source, f"Expected 'gazette' in by_source: {list(by_source.keys())}"
-        assert "press_release" in by_source, f"Expected 'press_release' in by_source"
+        assert "press_release" in by_source, "Expected 'press_release' in by_source"
         assert by_source["gazette"]["docs"] == 2
         assert by_source["press_release"]["docs"] == 1
         # Each source key should have docs, candidates, rejected, accepted
@@ -556,7 +588,7 @@ class TestYieldReport:
 
     def test_yield_report_by_language(self):
         """Yield report per-language breakdown should include English."""
-        from kassandra.classifier import ClassifierRun, classify_documents
+        from kassandra.classifier import classify_documents
 
         docs = [
             {"text": ADVERSE_CASES[0]["text"], "source": "test"},
@@ -572,7 +604,7 @@ class TestYieldReport:
 
     def test_yield_report_accepted_rate(self):
         """Yield report accepted_rate should be between 0 and 1."""
-        from kassandra.classifier import ClassifierRun, classify_documents
+        from kassandra.classifier import classify_documents
 
         docs = [
             {"text": ADVERSE_CASES[0]["text"], "source": "test"},
@@ -586,7 +618,7 @@ class TestYieldReport:
 
     def test_yield_report_empty_batch(self):
         """Yield report for empty batch should have zeros."""
-        from kassandra.classifier import ClassifierRun, classify_documents
+        from kassandra.classifier import classify_documents
 
         events, report = classify_documents([])
 
@@ -650,7 +682,8 @@ class TestClassifierInstrumentation:
 
     def test_classify_content_with_run_instrumentation(self):
         """classify_content should update ClassifierRun when provided."""
-        from kassandra.classifier import ClassifierRun, classify_content as cc
+        from kassandra.classifier import ClassifierRun
+        from kassandra.classifier import classify_content as cc
 
         run = ClassifierRun()
         events = cc(ADVERSE_CASES[0]["text"], run=run, source="test")
@@ -663,7 +696,8 @@ class TestClassifierInstrumentation:
 
     def test_classify_content_with_run_empty_text(self):
         """classify_content with run and empty text should record skipped."""
-        from kassandra.classifier import ClassifierRun, classify_content as cc
+        from kassandra.classifier import ClassifierRun
+        from kassandra.classifier import classify_content as cc
 
         run = ClassifierRun()
         events = cc("", run=run, source="test")
@@ -738,11 +772,11 @@ class TestMultilingualYieldReport:
         ]
         events, report = classify_documents(docs)
         # Should have at least one German document
-        assert any(
-            lang != "en" for lang in report["by_language"]
-        ), f"Expected non-English language in report: {report['by_language']}"
+        assert any(lang != "en" for lang in report["by_language"]), (
+            f"Expected non-English language in report: {report['by_language']}"
+        )
         # Verify the German document produced events
-        assert len(events) > 0, f"German insolvency text should produce events"
+        assert len(events) > 0, "German insolvency text should produce events"
 
     def test_mixed_language_batch(self):
         from kassandra.classifier import classify_documents
@@ -775,20 +809,25 @@ class TestMultilingualYieldReport:
 class TestProductionFalsePositiveRegressions:
     """False positives observed in daily Kassandra digests must stay fixed."""
 
-    @pytest.mark.parametrize("text", [
-        "Global Insolvency Outlook: Brace for Middle East spillovers April 22, 2026",
-        "shared craft and belief in constantly challenging yourself",
-        "challenging the feedback of how well the interview panel measures skills proficiency",
-        "screens have a negative impact on mental health and wellbeing",
-        "diversification of funding sources and debt maturities to minimize refinancing risk",
-    ])
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Global Insolvency Outlook: Brace for Middle East spillovers April 22, 2026",
+            "shared craft and belief in constantly challenging yourself",
+            "challenging the feedback of how well the interview panel measures skills proficiency",
+            "screens have a negative impact on mental health and wellbeing",
+            "diversification of funding sources and debt maturities to minimize refinancing risk",
+        ],
+    )
     def test_digest_false_positive_snippets_do_not_classify(self, text):
         events = classify_content(text)
         noisy_types = {"insolvency", "profit_warning", "payment_stress"}
         assert [e for e in events if e["event_type"] in noisy_types] == []
 
     def test_real_profit_warning_still_classifies(self):
-        text = "The company issued a profit warning and cut guidance after weaker trading conditions."
+        text = (
+            "The company issued a profit warning and cut guidance after weaker trading conditions."
+        )
         events = classify_content(text)
         assert "profit_warning" in [e["event_type"] for e in events]
 

@@ -4,12 +4,10 @@ All operational state, portfolios, registry, evidence metadata, events,
 and job state stored in a single SQLite WAL-mode database.
 """
 
-import json
 import logging
 import re
 import sqlite3
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from kassandra.config import get_config
@@ -512,8 +510,7 @@ def _migrate_18_scoring_provenance(conn: sqlite3.Connection) -> None:
     pre_by_rid: dict[str, tuple[str, str, str | None]] = {}
     pre_by_fpsv: dict[tuple[str, str], str] = {}
     for erow in conn.execute(
-        "SELECT run_id, input_fingerprint, scorer_version, provenance_json "
-        "FROM scoring_runs"
+        "SELECT run_id, input_fingerprint, scorer_version, provenance_json FROM scoring_runs"
     ).fetchall():
         erid = erow["run_id"]
         efp = erow["input_fingerprint"]
@@ -534,7 +531,8 @@ def _migrate_18_scoring_provenance(conn: sqlite3.Connection) -> None:
             logger.info(
                 "Score id=%s has run_id=%r but missing fingerprint/version; "
                 "creating legacy scoring_runs record",
-                row["id"], rid,
+                row["id"],
+                rid,
             )
             # Use score id to guarantee uniqueness across legacy rows
             synth_rid = f"legacy-{row['id']}"
@@ -565,8 +563,11 @@ def _migrate_18_scoring_provenance(conn: sqlite3.Connection) -> None:
                    (run_id, input_fingerprint, scorer_version, provenance_json, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
                 (
-                    synth_rid, synth_fp, synth_sv, prov,
-                    datetime.now(timezone.utc).isoformat(),
+                    synth_rid,
+                    synth_fp,
+                    synth_sv,
+                    prov,
+                    datetime.now(UTC).isoformat(),
                 ),
             )
 
@@ -660,8 +661,11 @@ def _migrate_18_scoring_provenance(conn: sqlite3.Connection) -> None:
                    (run_id, input_fingerprint, scorer_version, provenance_json, created_at)
                    VALUES (?, ?, ?, ?, ?)""",
                 (
-                    rid, fp, sv, prov,
-                    datetime.now(timezone.utc).isoformat(),
+                    rid,
+                    fp,
+                    sv,
+                    prov,
+                    datetime.now(UTC).isoformat(),
                 ),
             )
         except sqlite3.IntegrityError as e:
@@ -723,9 +727,9 @@ def _migrate_18_scoring_provenance(conn: sqlite3.Connection) -> None:
         )
 
     logger.info(
-        "Migration 18 provenance backfill: %d canonical scoring_runs rows, "
-        "%d scores processed",
-        len(canonical), len(rows),
+        "Migration 18 provenance backfill: %d canonical scoring_runs rows, %d scores processed",
+        len(canonical),
+        len(rows),
     )
 
 
@@ -739,9 +743,7 @@ def _repair_scoring_runs_shape(conn: sqlite3.Connection) -> None:
     Validates all existing rows before DROP; fails on duplicates, conflicting
     mappings, or null required fields instead of silently discarding data.
     """
-    table_info = {
-        (row[1], row[2]) for row in conn.execute("PRAGMA table_info(scoring_runs)")
-    }
+    table_info = {(row[1], row[2]) for row in conn.execute("PRAGMA table_info(scoring_runs)")}
     # Expected columns with types (name, type-normalized)
     expected_cols = {
         ("run_id", "TEXT"),
@@ -774,9 +776,7 @@ def _repair_scoring_runs_shape(conn: sqlite3.Connection) -> None:
         else:
             select_cols.append("NULL")
 
-    existing = conn.execute(
-        f"SELECT {', '.join(select_cols)} FROM scoring_runs"
-    ).fetchall()
+    existing = conn.execute(f"SELECT {', '.join(select_cols)} FROM scoring_runs").fetchall()
 
     # ── Validate all existing rows before DROP ──────────────────────────
     seen_run_ids: set[str] = set()
@@ -906,7 +906,10 @@ def _column_names(conn: sqlite3.Connection, table: str) -> set[str]:
 
 
 def _ensure_column(
-    conn: sqlite3.Connection, table: str, column: str, definition: str,
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
 ) -> None:
     """Add one missing column without masking partially-applied migrations."""
     if column not in _column_names(conn, table):
@@ -924,10 +927,7 @@ def _validate_critical_indexes(conn: sqlite3.Connection) -> None:
     Raises _SchemaIntegrityError if any critical index is missing.
     """
     all_indexes = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='index'"
-        )
+        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
     }
     required = {
         "idx_unconfirmed_dedup",
@@ -937,29 +937,21 @@ def _validate_critical_indexes(conn: sqlite3.Connection) -> None:
     }
     missing = required - all_indexes
     if missing:
-        raise _SchemaIntegrityError(
-            f"Critical indexes missing: {', '.join(sorted(missing))}"
-        )
+        raise _SchemaIntegrityError(f"Critical indexes missing: {', '.join(sorted(missing))}")
     # Verify scoring_runs unique constraint exists
-    scoring_indexes = {
-        row[1]: row[2]
-        for row in conn.execute("PRAGMA index_list(scoring_runs)")
-    }
+    scoring_indexes = {row[1]: row[2] for row in conn.execute("PRAGMA index_list(scoring_runs)")}
     unique_indexes = {
-        name for name, origin in scoring_indexes.items()
+        name
+        for name, origin in scoring_indexes.items()
         if origin == "u" or name.startswith("sqlite_autoindex")
     }
     if not unique_indexes:
         # Check via table_info for implicit PK
         pk_columns = [
-            row[1]
-            for row in conn.execute("PRAGMA table_info(scoring_runs)")
-            if row[5] > 0
+            row[1] for row in conn.execute("PRAGMA table_info(scoring_runs)") if row[5] > 0
         ]
         if not pk_columns:
-            raise _SchemaIntegrityError(
-                "scoring_runs has no UNIQUE constraint or PRIMARY KEY"
-            )
+            raise _SchemaIntegrityError("scoring_runs has no UNIQUE constraint or PRIMARY KEY")
 
 
 def _validate_provenance_triggers(conn: sqlite3.Connection) -> None:
@@ -968,10 +960,7 @@ def _validate_provenance_triggers(conn: sqlite3.Connection) -> None:
     Raises _SchemaIntegrityError if either trigger is missing.
     """
     triggers = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger'"
-        )
+        row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
     }
     required_triggers = {
         "trg_scores_validate_run_id_insert",
@@ -997,9 +986,7 @@ def _reconcile_runtime_schema(conn: sqlite3.Connection) -> None:
     skip the full per-column PRAGMA loop.
     """
     # ── Fast path: current schema + sentinel columns present ────────────────
-    current_version = conn.execute(
-        "SELECT MAX(version) FROM schema_version"
-    ).fetchone()[0] or 0
+    current_version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
     if current_version == SCHEMA_VERSION:
         try:
             conn.execute("""
@@ -1179,9 +1166,7 @@ def _split_sql(script: str) -> list[str]:
             continue
 
         # Track CREATE TRIGGER ... BEGIN blocks
-        if not in_trigger and re.match(
-            r"CREATE\s+TRIGGER\s+", stripped, re.IGNORECASE
-        ):
+        if not in_trigger and re.match(r"CREATE\s+TRIGGER\s+", stripped, re.IGNORECASE):
             in_trigger = True
         current.append(line)
 
@@ -1228,9 +1213,7 @@ def migrate(conn: sqlite3.Connection | None = None) -> int:
         """)
         conn.commit()
 
-        current = conn.execute(
-            "SELECT MAX(version) FROM schema_version"
-        ).fetchone()[0] or 0
+        current = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
 
         for version in sorted(MIGRATIONS.keys()):
             if version > current:
@@ -1285,6 +1268,6 @@ def record_journal(conn: sqlite3.Connection, action: str, details: str) -> None:
     """Append a journal entry to the database for durable audit trail."""
     conn.execute(
         "INSERT INTO journal (timestamp, action, details) VALUES (?, ?, ?)",
-        (datetime.now(timezone.utc).isoformat(), action, details),
+        (datetime.now(UTC).isoformat(), action, details),
     )
     conn.commit()

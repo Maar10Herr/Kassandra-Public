@@ -10,13 +10,12 @@ Maps portfolio companies to canonical entities using:
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from kassandra.config import get_config
 from kassandra.portfolio import get_domain_data
 from kassandra.sources.companies_house import CompaniesHouseClient
-from kassandra.sources.gleif import GleifClient
 from kassandra.sources.entity_resolution import normalize_jurisdiction
+from kassandra.sources.gleif import GleifClient
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ def resolve_portfolio(db: sqlite3.Connection) -> tuple[int, int, int]:
     ch_client = CompaniesHouseClient()
     gleif_client = GleifClient()
     domain_data = get_domain_data()
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     matched = 0
     lei_resolved = 0
 
@@ -65,7 +64,9 @@ def resolve_portfolio(db: sqlite3.Connection) -> tuple[int, int, int]:
             if result and result.get("company_number"):
                 profile = ch_client.get_company(result["company_number"])
                 if profile:
-                    registry_id = _upsert_registry_entry(db, profile, item, domain, ir_url, now, registry_id)
+                    registry_id = _upsert_registry_entry(
+                        db, profile, item, domain, ir_url, now, registry_id
+                    )
                     ch_resolved = True
 
         # Try GLEIF for LEI (all jurisdictions)
@@ -80,19 +81,14 @@ def resolve_portfolio(db: sqlite3.Connection) -> tuple[int, int, int]:
                 lei_resolved += 1
 
         # Create or update registry entry
-        registry_id = _ensure_registry(
-            db, item, domain, ir_url, lei_info, now, registry_id
-        )
+        registry_id = _ensure_registry(db, item, domain, ir_url, lei_info, now, registry_id)
 
         # Count as resolved if we have CH data, LEI, or both
         if registry_id and (ch_resolved or lei_info):
             matched += 1
 
     db.commit()
-    logger.info(
-        f"Registry: {matched} resolved, {lei_resolved} with LEI, "
-        f"of {len(items)} total"
-    )
+    logger.info(f"Registry: {matched} resolved, {lei_resolved} with LEI, of {len(items)} total")
     return matched, lei_resolved, len(items)
 
 
@@ -109,13 +105,16 @@ def _upsert_registry_entry(
     try:
         address = profile.get("registered_office_address", {})
         address_str = ", ".join(
-            filter(None, [
-                address.get("address_line_1", ""),
-                address.get("address_line_2", ""),
-                address.get("locality", ""),
-                address.get("postal_code", ""),
-                address.get("country", ""),
-            ])
+            filter(
+                None,
+                [
+                    address.get("address_line_1", ""),
+                    address.get("address_line_2", ""),
+                    address.get("locality", ""),
+                    address.get("postal_code", ""),
+                    address.get("country", ""),
+                ],
+            )
         )
 
         if existing_id:

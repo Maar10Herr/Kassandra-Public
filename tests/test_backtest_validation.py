@@ -71,11 +71,8 @@ def _manifest() -> PointInTimeManifest:
 
 def test_rejects_evidence_retrieved_after_as_of() -> None:
     manifest = _manifest()
-    leaked = replace(
-        manifest.documents[0], retrieval_time="2021-07-02T00:00:00+00:00"
-    )
-    manifest = replace(
-        manifest, documents=(leaked, manifest.documents[1]))
+    leaked = replace(manifest.documents[0], retrieval_time="2021-07-02T00:00:00+00:00")
+    manifest = replace(manifest, documents=(leaked, manifest.documents[1]))
 
     with pytest.raises(ValidationContractError, match="retrieval_time"):
         run_point_in_time_evaluation(manifest)
@@ -142,6 +139,7 @@ def test_comparison_metrics_pre_parses_timestamps_linearly():
     per document), not M × N × 2.
     """
     from unittest.mock import patch
+
     from kassandra import backtest as bt_module
 
     manifest = _manifest()
@@ -156,7 +154,9 @@ def test_comparison_metrics_pre_parses_timestamps_linearly():
         )
         extra_docs.append(_document(cid, "2020-06-01"))
         extra_cases.append(
-            CohortCase(f"control-{i + 2}", "control", "Industrials", "industrials-2020", "2020-12-30")
+            CohortCase(
+                f"control-{i + 2}", "control", "Industrials", "industrials-2020", "2020-12-30"
+            )
         )
         extra_docs.append(_document(f"control-{i + 2}", "2020-06-01", "ordinary update"))
     manifest = replace(
@@ -171,6 +171,7 @@ def test_comparison_metrics_pre_parses_timestamps_linearly():
         nonlocal call_count
         call_count += 1
         from datetime import datetime
+
         try:
             parsed = datetime.fromisoformat(value)
         except (TypeError, ValueError) as exc:
@@ -180,9 +181,7 @@ def test_comparison_metrics_pre_parses_timestamps_linearly():
         return parsed
 
     with patch.object(bt_module, "_parse_timestamp", side_effect=counting_parse):
-        metrics = _comparison_metrics(
-            manifest, lambda case, documents: case.case_id.startswith("distressed")
-        )
+        _comparison_metrics(manifest, lambda case, documents: case.case_id.startswith("distressed"))
 
     total_docs = len(manifest.documents)
     total_cases = len(manifest.cases)

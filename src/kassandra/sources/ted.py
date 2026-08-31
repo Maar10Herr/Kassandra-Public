@@ -18,14 +18,15 @@ The 13 existing TED edges in the DB were created during pilot enrichment
 and serve as the baseline.
 """
 
-import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
 
+import httpx
+
+from kassandra.http_security import safe_get
 from kassandra.shock_channel import populate_edge_attributes
 
 logger = logging.getLogger(__name__)
@@ -52,17 +53,21 @@ def _ted_api_request(endpoint: str, params: dict | None = None) -> dict | None:
         url = f"{endpoint}?{urllib.parse.urlencode(clean_params)}"
 
     try:
-        req = Request(
-            url,
-            headers={
-                "User-Agent": "Kassandra/1.0 (economic-dependency-monitor; "
-                              "https://github.com/Maar10Herr/Kassandra-Public)",
-                "Accept": "application/json",
-            },
-        )
-        with urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
+        with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
+            response = safe_get(
+                client,
+                url,
+                timeout=30,
+                max_bytes=2 * 1024 * 1024,
+                headers={
+                    "User-Agent": "Kassandra/1.0 (economic-dependency-monitor; "
+                    "https://github.com/Maar10Herr/Kassandra-Public)",
+                    "Accept": "application/json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+    except (httpx.HTTPError, ValueError) as e:
         logger.warning(f"TED API request failed: {e}")
         return None
 
@@ -133,9 +138,7 @@ def _extract_contract_parties(
     # Extract winners
     winners = []
     award_section = (
-        notice.get("award", {})
-        or notice.get("lot", {})
-        or notice.get("awardedContract", {})
+        notice.get("award", {}) or notice.get("lot", {}) or notice.get("awardedContract", {})
     )
     if isinstance(award_section, dict):
         winner = award_section.get("winner", {}) or award_section.get("contractor", {})
@@ -155,11 +158,7 @@ def _extract_contract_parties(
 
     # Extract value
     value_eur = None
-    value_section = (
-        award_section.get("value", {})
-        if isinstance(award_section, dict)
-        else None
-    )
+    value_section = award_section.get("value", {}) if isinstance(award_section, dict) else None
     if value_section:
         value_eur = value_section.get("valueEur", None) or value_section.get("total", None)
 
@@ -177,12 +176,14 @@ def _extract_contract_parties(
 
     for buyer in buyers:
         for winner in winners:
-            results.append({
-                "buyer_name": buyer,
-                "winner_name": winner,
-                "contract_title": title[:200] if title else "Unknown",
-                "value_eur": value_eur,
-            })
+            results.append(
+                {
+                    "buyer_name": buyer,
+                    "winner_name": winner,
+                    "contract_title": title[:200] if title else "Unknown",
+                    "value_eur": value_eur,
+                }
+            )
 
     return results
 
@@ -210,19 +211,14 @@ def discover_ted_edges(
         company_names = [(r["id"], r["canonical_name"]) for r in rows]
     elif isinstance(company_names, list) and company_names and isinstance(company_names[0], str):
         # Convert to (id, name) tuples
-        lookup = {}
         rows = db.execute(
             """SELECT id, canonical_name FROM registry
                WHERE company_type != 'economic_concept'"""
         ).fetchall()
         name_to_id = {r["canonical_name"]: r["id"] for r in rows}
-        company_names = [
-            (name_to_id.get(n), n)
-            for n in company_names
-            if n in name_to_id
-        ]
+        company_names = [(name_to_id.get(n), n) for n in company_names if n in name_to_id]
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     created = 0
     duplicates = 0
     errors = 0
@@ -292,13 +288,15 @@ def discover_ted_edges(
                                    'outgoing', ?,
                                    ?, ?, ?, ?, ?, ?, ?)""",
                         (
-                            registry_id, buyer_reg_id,
-                            materiality, now,
-                            attrs["shock_channel"], attrs["lag_bucket"],
+                            registry_id,
+                            buyer_reg_id,
+                            materiality,
+                            now,
+                            attrs["shock_channel"],
+                            attrs["lag_bucket"],
                             attrs["buffer_proxy"],
                             attrs["switching_time_bucket"],
-                            f"TED: {party['contract_title']} — "
-                            f"value={party['value_eur']} EUR",
+                            f"TED: {party['contract_title']} — value={party['value_eur']} EUR",
                             "ted_official_procurement_notice",
                             dedup_key,
                         ),
@@ -331,6 +329,7 @@ def discover_ted_edges(
 def main():
     """CLI entry point."""
     import argparse
+
     from kassandra.db import get_db
 
     parser = argparse.ArgumentParser(description="Discover TED procurement edges")
@@ -348,10 +347,14 @@ def main():
     if args.dry_run:
         print("DRY RUN")
     else:
-        print(f"Created {result['created']} TED edges "
-              f"({result['duplicates']} dupes, {result['errors']} errors)")
-        print(f"Checked {result['companies_checked']} companies, "
-              f"found {result['notices_found']} notices")
+        print(
+            f"Created {result['created']} TED edges "
+            f"({result['duplicates']} dupes, {result['errors']} errors)"
+        )
+        print(
+            f"Checked {result['companies_checked']} companies, "
+            f"found {result['notices_found']} notices"
+        )
 
 
 if __name__ == "__main__":

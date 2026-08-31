@@ -37,7 +37,7 @@ import json
 import logging
 import math
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from kassandra.config import get_config
@@ -53,9 +53,7 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
-def _build_score_input_manifest(
-    db: sqlite3.Connection, weights: dict[str, Any]
-) -> dict[str, Any]:
+def _build_score_input_manifest(db: sqlite3.Connection, weights: dict[str, Any]) -> dict[str, Any]:
     """Build the canonical, run-wide input record used for score provenance.
 
     ``global`` freshness is the latest successful completion per source adapter.
@@ -138,16 +136,29 @@ def _build_score_input_manifest(
         "registry_identity": [dict(row) for row in registry_rows],
         "active_evidence": [
             {
-                "id": row["evidence_id"], "content_hash": row["content_hash"],
+                "id": row["evidence_id"],
+                "content_hash": row["content_hash"],
                 "publication_time": row["publication_time"],
                 "availability_time": row["availability_time"],
             }
             for row in active_events
         ],
         "active_events": [
-            {key: row[key] for key in ("id", "registry_id", "evidence_id", "event_type",
-                                        "event_subtype", "severity", "confidence", "extracted_at",
-                                        "active", "status")}
+            {
+                key: row[key]
+                for key in (
+                    "id",
+                    "registry_id",
+                    "evidence_id",
+                    "event_type",
+                    "event_subtype",
+                    "severity",
+                    "confidence",
+                    "extracted_at",
+                    "active",
+                    "status",
+                )
+            }
             for row in active_events
         ],
         "relevant_edges": [dict(row) for row in relevant_edges],
@@ -161,6 +172,7 @@ def _build_score_input_manifest(
         "fingerprint": hashlib.sha256(_canonical_json(manifest).encode()).hexdigest(),
         "active_events": active_events,
     }
+
 
 # ── Transmission risk multipliers (module-level, shared) ─────────────────────
 
@@ -206,7 +218,9 @@ BUFFER_MULT = {
 
 
 def compute_scores(
-    db: sqlite3.Connection, *, persist: bool = True,
+    db: sqlite3.Connection,
+    *,
+    persist: bool = True,
 ) -> list[dict[str, Any]]:
     """Compute explainable investigation scores for all portfolio companies.
 
@@ -222,7 +236,7 @@ def compute_scores(
     """
     config = get_config()
     weights = config.get("scoring", "weights", default={})
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     input_record = _build_score_input_manifest(db, weights)
     input_fingerprint = input_record["fingerprint"]
@@ -235,7 +249,7 @@ def compute_scores(
     # Build active_events_by_registry from the already-fetched rows (no second scan)
     active_events_by_registry: dict[int, list[dict[str, Any]]] = {}
     for event in input_record["active_events"]:
-        if event["event_type"] not in ('unconfirmed_review_candidate', 'unconfirmed_adverse'):
+        if event["event_type"] not in ("unconfirmed_review_candidate", "unconfirmed_adverse"):
             active_events_by_registry.setdefault(event["registry_id"], []).append(dict(event))
 
     # Persist the run-level provenance only for analytical snapshot runs. The
@@ -315,35 +329,25 @@ def compute_scores(
             # Direct adverse signal — transmission is less relevant when we
             # already have a direct hit; boost with credibility and recency
             active_watch_priority = (
-                signal_score
-                * credibility_score
-                * materiality_factor
-                * recency_decay
+                signal_score * credibility_score * materiality_factor * recency_decay
             )
         elif transmission_signal_score > 0:
             # No direct adverse event, but exposed via transmission
-            active_watch_priority = (
-                transmission_signal_score
-                * materiality_factor
-                * recency_decay
-            )
+            active_watch_priority = transmission_signal_score * materiality_factor * recency_decay
         else:
             active_watch_priority = 0.0
 
         # ── v3: Coverage Monitor Priority (data quality only) ─────────────────
         # Graph coverage: how much graph data exists
         graph_coverage_score = min(
-            legal_ownership_exposure / 100.0 + economic_dep_exposure / 50.0,
-            1.0
+            legal_ownership_exposure / 100.0 + economic_dep_exposure / 50.0, 1.0
         )
 
         # Information gap: 1.0 if materiality is unknown (needs enrichment)
         information_gap_score = 1.0 if not materiality_known else 0.0
 
         coverage_monitor_priority = (
-            0.4 * graph_coverage_score
-            + 0.3 * information_gap_score
-            + 0.3 * source_staleness_score
+            0.4 * graph_coverage_score + 0.3 * information_gap_score + 0.3 * source_staleness_score
         )
 
         # For backward compatibility: analyst_priority = active_watch_priority
@@ -443,29 +447,31 @@ def compute_scores(
                     round(graph_coverage_score, 3),
                     round(information_gap_score, 3),
                     round(source_staleness_score, 3),
-                    json.dumps({
-                        "scorer_version": SCORER_VERSION,
-                        "run_id": run_id,
-                        "signal_score": round(signal_score, 3),
-                        "recency_score": round(recency_score, 3),
-                        "credibility_score": round(credibility_score, 3),
-                        "entity_relevance": round(entity_relevance, 3),
-                        "legal_ownership_exposure": round(legal_ownership_exposure, 1),
-                        "exposure_normalized": round(exposure_normalized, 3),
-                        "economic_dep_exposure": round(economic_dep_exposure, 1),
-                        "econ_exposure_normalized": round(econ_exposure_normalized, 3),
-                        "materiality_score": round(materiality_score, 3),
-                        "signal_factors": signal_factors,
-                        "materiality_known": materiality_known,
-                        "priority_reason": priority_reason,
-                        "coverage_quality": coverage_quality,
-                        "active_watch_priority": round(active_watch_priority, 4),
-                        "coverage_monitor_priority": round(coverage_monitor_priority, 4),
-                        "transmission_signal_score": round(transmission_signal_score, 4),
-                        "graph_coverage_score": round(graph_coverage_score, 3),
-                        "information_gap_score": round(information_gap_score, 3),
-                        "source_staleness_score": round(source_staleness_score, 3),
-                    }),
+                    json.dumps(
+                        {
+                            "scorer_version": SCORER_VERSION,
+                            "run_id": run_id,
+                            "signal_score": round(signal_score, 3),
+                            "recency_score": round(recency_score, 3),
+                            "credibility_score": round(credibility_score, 3),
+                            "entity_relevance": round(entity_relevance, 3),
+                            "legal_ownership_exposure": round(legal_ownership_exposure, 1),
+                            "exposure_normalized": round(exposure_normalized, 3),
+                            "economic_dep_exposure": round(economic_dep_exposure, 1),
+                            "econ_exposure_normalized": round(econ_exposure_normalized, 3),
+                            "materiality_score": round(materiality_score, 3),
+                            "signal_factors": signal_factors,
+                            "materiality_known": materiality_known,
+                            "priority_reason": priority_reason,
+                            "coverage_quality": coverage_quality,
+                            "active_watch_priority": round(active_watch_priority, 4),
+                            "coverage_monitor_priority": round(coverage_monitor_priority, 4),
+                            "transmission_signal_score": round(transmission_signal_score, 4),
+                            "graph_coverage_score": round(graph_coverage_score, 3),
+                            "information_gap_score": round(information_gap_score, 3),
+                            "source_staleness_score": round(source_staleness_score, 3),
+                        }
+                    ),
                     explanation,
                     now,
                     input_fingerprint,
@@ -479,40 +485,46 @@ def compute_scores(
                 f"watch={active_watch_priority:.4f} coverage={coverage_monitor_priority:.4f}"
             )
 
-        results.append({
-            "registry_id": registry_id,
-            "canonical_name": row["canonical_name"],
-            "event_count": event_count,
-            "signal_score": round(signal_score, 3),
-            "recency_score": round(recency_score, 3),
-            "credibility_score": round(credibility_score, 3),
-            "entity_relevance": round(entity_relevance, 3),
-            "legal_ownership_exposure": round(legal_ownership_exposure, 1),
-            "exposure_normalized": round(exposure_normalized, 3),
-            "economic_dep_exposure": round(economic_dep_exposure, 1),
-            "econ_exposure_normalized": round(econ_exposure_normalized, 3),
-            "materiality_score": round(materiality_score, 3),
-            "analyst_priority": round(analyst_priority, 4),
-            "active_watch_priority": round(active_watch_priority, 4),
-            "coverage_monitor_priority": round(coverage_monitor_priority, 4),
-            "transmission_signal_score": round(transmission_signal_score, 4),
-            "graph_coverage_score": round(graph_coverage_score, 3),
-            "information_gap_score": round(information_gap_score, 3),
-            "source_staleness_score": round(source_staleness_score, 3),
-            "priority_reason": priority_reason,
-            "coverage_quality": coverage_quality,
-            "explanation": explanation,
-            "materiality_known": materiality_known,
-        })
+        results.append(
+            {
+                "registry_id": registry_id,
+                "canonical_name": row["canonical_name"],
+                "event_count": event_count,
+                "signal_score": round(signal_score, 3),
+                "recency_score": round(recency_score, 3),
+                "credibility_score": round(credibility_score, 3),
+                "entity_relevance": round(entity_relevance, 3),
+                "legal_ownership_exposure": round(legal_ownership_exposure, 1),
+                "exposure_normalized": round(exposure_normalized, 3),
+                "economic_dep_exposure": round(economic_dep_exposure, 1),
+                "econ_exposure_normalized": round(econ_exposure_normalized, 3),
+                "materiality_score": round(materiality_score, 3),
+                "analyst_priority": round(analyst_priority, 4),
+                "active_watch_priority": round(active_watch_priority, 4),
+                "coverage_monitor_priority": round(coverage_monitor_priority, 4),
+                "transmission_signal_score": round(transmission_signal_score, 4),
+                "graph_coverage_score": round(graph_coverage_score, 3),
+                "information_gap_score": round(information_gap_score, 3),
+                "source_staleness_score": round(source_staleness_score, 3),
+                "priority_reason": priority_reason,
+                "coverage_quality": coverage_quality,
+                "explanation": explanation,
+                "materiality_known": materiality_known,
+            }
+        )
 
     if persist:
         db.commit()
-        journal_event(db, "scoring_run", {
-            "run_id": run_id,
-            "companies_scored": len(results),
-            "new_snapshots": sum(1 for r in results if r["analyst_priority"] > 0),
-            "scorer_version": SCORER_VERSION,
-        })
+        journal_event(
+            db,
+            "scoring_run",
+            {
+                "run_id": run_id,
+                "companies_scored": len(results),
+                "new_snapshots": sum(1 for r in results if r["analyst_priority"] > 0),
+                "scorer_version": SCORER_VERSION,
+            },
+        )
 
     # Sort: active_watch_priority > 0 first (descending), then coverage_monitor_priority descending
     results.sort(
@@ -572,7 +584,7 @@ def _compute_recency(latest_event_at: str | None) -> float:
 
     try:
         event_date = datetime.fromisoformat(latest_event_at.replace("Z", "+00:00"))
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         days_ago = (now - event_date).total_seconds() / 86400
         return round(max(0.0, 1.0 - (days_ago / 30.0)), 3)
     except (ValueError, TypeError):
@@ -644,7 +656,9 @@ def _compute_legal_ownership_exposure(db: sqlite3.Connection, registry_id: int) 
             unknown_mat_count += 1
         conf = edge["confidence"] if edge["confidence"] is not None else 0.5
         # P1-2: NULL criticality → 0.0, NOT 0.3. No amplification without evidence.
-        crit = edge["operational_criticality"] if edge["operational_criticality"] is not None else 0.0
+        crit = (
+            edge["operational_criticality"] if edge["operational_criticality"] is not None else 0.0
+        )
         exposure += tw * mat * conf * (1.0 + crit)
 
     # Add incoming edges
@@ -668,9 +682,7 @@ def _is_graph_capped(db: sqlite3.Connection, registry_id: int) -> bool:
     return bool(row and row["cap_hit"])
 
 
-def _compute_economic_dependency_exposure(
-    db: sqlite3.Connection, registry_id: int
-) -> float:
+def _compute_economic_dependency_exposure(db: sqlite3.Connection, registry_id: int) -> float:
     """Compute economic dependency exposure from edges with edge_source != 'gleif'.
 
     After the economic_entities → edges promotion bridge, all economic
@@ -735,9 +747,15 @@ def _compute_economic_dependency_exposure(
             quality_mult = edge["quality_score"] if edge["quality_score"] is not None else 0.4
 
             exposure += (
-                type_score * conc * conf * criticality_factor
-                * dir_factor * quality_mult
-                * shock_mult * lag_mult * buffer_mult
+                type_score
+                * conc
+                * conf
+                * criticality_factor
+                * dir_factor
+                * quality_mult
+                * shock_mult
+                * lag_mult
+                * buffer_mult
             )
 
         return round(exposure, 1)
@@ -847,10 +865,7 @@ def _compute_transmission_signal(db: sqlite3.Connection, registry_id: int) -> fl
         # Quality score from edge tier
         quality_mult = edge["quality_score"] if edge["quality_score"] is not None else 0.35
 
-        transmission = (
-            edge_conf * shock_mult * lag_mult * buffer_mult
-            * mat_factor * quality_mult
-        )
+        transmission = edge_conf * shock_mult * lag_mult * buffer_mult * mat_factor * quality_mult
         max_transmission = max(max_transmission, transmission)
 
     # Normalize: cap at 1.0 (theoretical max is ~ 1.0 * 1.5 * 1.3 * 1.3 * 1.0 * 0.85 ≈ 2.2)
@@ -880,13 +895,7 @@ def _compute_materiality(db: sqlite3.Connection, registry_id: int) -> float:
         return 0.0
 
     # Filter to edges WITHOUT an unknown_reason (truly data-derived)
-    known_values = sorted(
-        e[0]
-        for e in edges
-        if e[1] is None
-        and e[0] is not None
-        and e[0] > 0
-    )
+    known_values = sorted(e[0] for e in edges if e[1] is None and e[0] is not None and e[0] > 0)
 
     if not known_values:
         return 0.0
@@ -929,9 +938,7 @@ def _is_materiality_known(db: sqlite3.Connection, registry_id: int) -> bool:
     return False  # All proxy, NULL, zero, or unknown
 
 
-def _get_graph_explanation(
-    db: sqlite3.Connection, registry_id: int
-) -> str:
+def _get_graph_explanation(db: sqlite3.Connection, registry_id: int) -> str:
     """Get a human-readable legal ownership graph explanation."""
     edges = db.execute(
         """SELECT e.relationship_type, e.confidence,
@@ -951,9 +958,7 @@ def _get_graph_explanation(
     parts = []
     for edge in edges:
         target = edge["target_name"] or "unknown entity"
-        parts.append(
-            f"{edge['relationship_type']} → {target[:40]}"
-        )
+        parts.append(f"{edge['relationship_type']} → {target[:40]}")
 
     return "; ".join(parts[:3])
 
@@ -1104,9 +1109,7 @@ def _compute_coverage_quality(
     return "unknown"
 
 
-def _compute_source_staleness(
-    registry_id: int, source_freshness: dict[str, Any]
-) -> float:
+def _compute_source_staleness(registry_id: int, source_freshness: dict[str, Any]) -> float:
     """Compute entity staleness from precomputed global freshness.
 
     Global freshness is a once-per-run source adapter watermark. Entity
@@ -1116,11 +1119,13 @@ def _compute_source_staleness(
     """
     global_freshness = source_freshness.get("global", {})
     covered_sources = source_freshness.get("entity_coverage", {}).get(str(registry_id), [])
-    timestamps = [global_freshness[source] for source in covered_sources if source in global_freshness]
+    timestamps = [
+        global_freshness[source] for source in covered_sources if source in global_freshness
+    ]
     if not timestamps:
         return 0.0
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     staleness_values = []
     for completed_at in timestamps:
         try:
@@ -1183,8 +1188,14 @@ def _build_explanation(
         parts.append(f"signal={signal_score:.2f}, recency={recency_score:.2f}")
 
     if legal_ownership_exposure > 0:
-        mat_note = " (no materiality data)" if materiality_score == 0 else f" (mat={materiality_score:.2f})"
-        parts.append(f"legal ownership edges={legal_ownership_exposure:.0f}{mat_note}: {graph_explanation}")
+        mat_note = (
+            " (no materiality data)"
+            if materiality_score == 0
+            else f" (mat={materiality_score:.2f})"
+        )
+        parts.append(
+            f"legal ownership edges={legal_ownership_exposure:.0f}{mat_note}: {graph_explanation}"
+        )
 
     if economic_dep_exposure > 0:
         parts.append(f"economic dependencies={economic_dep_exposure:.0f}")
@@ -1195,8 +1206,10 @@ def _build_explanation(
     # Priority level for watch items
     if is_watch_item:
         priority_label = (
-            "HIGH" if active_watch_priority > 0.3
-            else "MEDIUM" if active_watch_priority > 0.1
+            "HIGH"
+            if active_watch_priority > 0.3
+            else "MEDIUM"
+            if active_watch_priority > 0.1
             else "LOW"
         )
     else:
@@ -1257,13 +1270,15 @@ def compute_legal_ownership_exposure_for_company(
 
     edge_list = []
     for edge in edges:
-        edge_list.append({
-            "target": edge["target_name"] or f"LEI:{edge.get('target_lei', '?')}",
-            "type": edge["relationship_type"],
-            "confidence": edge["confidence"],
-            "materiality": edge["economic_materiality"],
-            "criticality": edge["operational_criticality"],
-        })
+        edge_list.append(
+            {
+                "target": edge["target_name"] or f"LEI:{edge.get('target_lei', '?')}",
+                "type": edge["relationship_type"],
+                "confidence": edge["confidence"],
+                "materiality": edge["economic_materiality"],
+                "criticality": edge["operational_criticality"],
+            }
+        )
 
     return {
         "edges": edge_list,
@@ -1271,5 +1286,5 @@ def compute_legal_ownership_exposure_for_company(
         "edge_count": len(edge_list),
         "materiality_known": materiality_known,
         "explanation": f"{len(edge_list)} legal ownership edges (parent/subsidiary only), exposure={exposure:.1f}"
-                      + (" [materiality unknown — no economic data]" if not materiality_known else ""),
+        + (" [materiality unknown — no economic data]" if not materiality_known else ""),
     }

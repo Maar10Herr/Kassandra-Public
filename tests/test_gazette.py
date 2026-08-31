@@ -4,12 +4,11 @@ import sqlite3
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
 from kassandra.contracts import CollectionMetrics
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
+
 
 def _make_db() -> sqlite3.Connection:
     """Create an in-memory database with the minimum schema for testing."""
@@ -56,12 +55,17 @@ def _make_db() -> sqlite3.Connection:
             raw_event_json TEXT
         );
     """)
-    db.execute("INSERT INTO registry (canonical_name, jurisdiction) VALUES (?, ?)",
-               ("ACME UK LTD", "GB"))
-    db.execute("INSERT INTO registry (canonical_name, jurisdiction) VALUES (?, ?)",
-               ("BRITISH GAS PLC", "england-wales"))
-    db.execute("INSERT INTO registry (canonical_name, jurisdiction) VALUES (?, ?)",
-               ("DEUTSCHE BANK AG", "DE"))
+    db.execute(
+        "INSERT INTO registry (canonical_name, jurisdiction) VALUES (?, ?)", ("ACME UK LTD", "GB")
+    )
+    db.execute(
+        "INSERT INTO registry (canonical_name, jurisdiction) VALUES (?, ?)",
+        ("BRITISH GAS PLC", "england-wales"),
+    )
+    db.execute(
+        "INSERT INTO registry (canonical_name, jurisdiction) VALUES (?, ?)",
+        ("DEUTSCHE BANK AG", "DE"),
+    )
     db.commit()
     return db
 
@@ -96,8 +100,8 @@ _RSS_BODY = """<?xml version="1.0" encoding="UTF-8"?>
 
 def test_single_fetch_per_collection_cycle():
     """One _collect_gazette call = exactly one Gazette HTTP GET."""
-    from kassandra.sources.gazette import GAZETTE_INSOLVENCY_FEED
     from kassandra.collector import _collect_gazette
+    from kassandra.sources.gazette import GAZETTE_INSOLVENCY_FEED
 
     db = _make_db()
 
@@ -133,6 +137,7 @@ def test_single_fetch_per_collection_cycle():
 def test_collect_for_company_from_notices_no_http():
     """collect_for_company_from_notices must make zero HTTP calls."""
     from kassandra.sources.gazette import GazetteClient
+
     db = _make_db()
 
     with patch("httpx.Client"):
@@ -147,7 +152,10 @@ def test_collect_for_company_from_notices_no_http():
     # Monkey-patch the client's _client so we catch any accidental requests
     client._client = MagicMock()
     collected = client.collect_for_company_from_notices(
-        db=db, registry_id=1, company_name="ACME UK LTD", notices=notices,
+        db=db,
+        registry_id=1,
+        company_name="ACME UK LTD",
+        notices=notices,
     )
 
     # No HTTP calls
@@ -161,6 +169,7 @@ def test_collect_for_company_from_notices_no_http():
 def test_deprecated_path_still_works():
     """collect_for_company still works for callers that haven't migrated."""
     from kassandra.sources.gazette import GazetteClient
+
     db = _make_db()
 
     with patch("httpx.Client"):
@@ -172,7 +181,9 @@ def test_deprecated_path_still_works():
 
     with patch.object(client, "search_company", return_value=notices):
         collected = client.collect_for_company(
-            db=db, registry_id=1, company_name="ACME UK LTD",
+            db=db,
+            registry_id=1,
+            company_name="ACME UK LTD",
         )
 
     assert isinstance(collected, CollectionMetrics)
@@ -187,7 +198,9 @@ def test_filter_notices_token_overlap():
         client = GazetteClient()
 
     notices = [
-        _make_notice("British Gas PLC — Administration Order", "administration order for British Gas"),
+        _make_notice(
+            "British Gas PLC — Administration Order", "administration order for British Gas"
+        ),
         _make_notice("ACME UK LTD — Winding-Up", "winding-up"),
         _make_notice("GASTECH HOLDINGS — Liquidation", "liquidation"),
     ]

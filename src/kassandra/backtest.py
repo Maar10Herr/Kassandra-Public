@@ -13,9 +13,10 @@ before expanding graph or deploying.
 import hashlib
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 from kassandra.classifier import classify_content
 
@@ -109,7 +110,9 @@ def _parse_timestamp(value: str, field_name: str) -> datetime:
     try:
         parsed = datetime.fromisoformat(value)
     except (TypeError, ValueError) as exc:
-        raise ValidationContractError(f"{field_name} must be an ISO-8601 timestamp: {value!r}") from exc
+        raise ValidationContractError(
+            f"{field_name} must be an ISO-8601 timestamp: {value!r}"
+        ) from exc
     if parsed.tzinfo is None:
         raise ValidationContractError(f"{field_name} must include an explicit timezone: {value!r}")
     return parsed
@@ -147,7 +150,9 @@ def _manifest_issues(manifest: PointInTimeManifest) -> list[str]:
     groups: dict[str, list[CohortCase]] = {}
     for case in manifest.cases:
         if not case.sector or not case.matched_group_id or not case.outcome_date:
-            issues.append(f"case {case.case_id} requires sector, matched_group_id, and outcome_date")
+            issues.append(
+                f"case {case.case_id} requires sector, matched_group_id, and outcome_date"
+            )
             continue
         try:
             outcome = _parse_timestamp(f"{case.outcome_date}T00:00:00+00:00", "outcome_date")
@@ -161,7 +166,9 @@ def _manifest_issues(manifest: PointInTimeManifest) -> list[str]:
         distressed = [case for case in cases if case.cohort == "distressed"]
         controls = [case for case in cases if case.cohort == "control"]
         if not distressed or not controls:
-            issues.append(f"matched group {group_id} requires distressed cases and non-distressed controls")
+            issues.append(
+                f"matched group {group_id} requires distressed cases and non-distressed controls"
+            )
             continue
         sectors = {case.sector for case in cases}
         if len(sectors) != 1:
@@ -186,7 +193,9 @@ def _manifest_issues(manifest: PointInTimeManifest) -> list[str]:
     return issues
 
 
-def _comparison_metrics(manifest: PointInTimeManifest, scorer: ValidationScorer) -> ComparisonMetrics:
+def _comparison_metrics(
+    manifest: PointInTimeManifest, scorer: ValidationScorer
+) -> ComparisonMetrics:
     predictions: dict[str, bool] = {}
     lead_times: list[int] = []
     tp = fp = fn = tn = 0
@@ -202,10 +211,7 @@ def _comparison_metrics(manifest: PointInTimeManifest, scorer: ValidationScorer)
     for case in manifest.cases:
         outcome = datetime.fromisoformat(f"{case.outcome_date}T00:00:00+00:00")
         pre_parsed = docs_by_case.get(case.case_id, [])
-        eligible = [
-            (doc, pub) for doc, pub, ret in pre_parsed
-            if pub <= outcome and ret <= outcome
-        ]
+        eligible = [(doc, pub) for doc, pub, ret in pre_parsed if pub <= outcome and ret <= outcome]
         predicted = bool(scorer(case, [d for d, _ in eligible]))
         predictions[case.case_id] = predicted
         if case.cohort == "distressed":
@@ -267,6 +273,7 @@ def run_point_in_time_evaluation(
 @dataclass
 class BacktestResult:
     """Result of running a single signal through the classifier."""
+
     case_id: str
     signal_date: str
     expected_type: str
@@ -283,6 +290,7 @@ class BacktestResult:
 @dataclass
 class CaseBacktestSummary:
     """Summary of backtest for one distressed case."""
+
     case_id: str
     company_name: str
     deterioration_date: str
@@ -301,7 +309,6 @@ def run_backtest_for_case(case: Any) -> CaseBacktestSummary:
 
     Feeds each signal point through the classifier and records results.
     """
-    from kassandra.benchmark import SignalPoint, DistressedCase
 
     results: list[BacktestResult] = []
 
@@ -312,12 +319,8 @@ def run_backtest_for_case(case: Any) -> CaseBacktestSummary:
     # Compute summary
     detected = [r for r in results if r.detected]
     missed = [r for r in results if not r.detected]
-    type_correct = sum(
-        1 for r in detected if r.detected_type == r.expected_type
-    )
-    severity_correct = sum(
-        1 for r in detected if r.detected_severity == r.expected_severity
-    )
+    type_correct = sum(1 for r in detected if r.detected_type == r.expected_type)
+    severity_correct = sum(1 for r in detected if r.detected_severity == r.expected_severity)
 
     first = detected[0].signal_date if detected else None
     det_date = datetime.fromisoformat(case.deterioration_date)
@@ -427,14 +430,16 @@ def print_backtest_report(summaries: list[CaseBacktestSummary]) -> str:
 
     lines.append(f"Cases tested: {len(summaries)}")
     lines.append(f"Total signals: {total_signals}")
-    lines.append(f"Detected: {total_detected} ({total_detected/total_signals*100:.0f}%)")
-    lines.append(f"Missed: {total_missed} ({total_missed/total_signals*100:.0f}%)")
+    lines.append(f"Detected: {total_detected} ({total_detected / total_signals * 100:.0f}%)")
+    lines.append(f"Missed: {total_missed} ({total_missed / total_signals * 100:.0f}%)")
     lines.append(f"Type correct: {total_type_correct}/{total_detected}")
     lines.append(f"Severity correct: {total_severity_correct}/{total_detected}")
     lines.append("")
 
     lines.append("-" * 70)
-    lines.append(f"{'Case':<30s} {'Signals':>8s} {'Detected':>8s} {'Lead Time':>10s} {'Type OK':>8s} {'Sev OK':>8s}")
+    lines.append(
+        f"{'Case':<30s} {'Signals':>8s} {'Detected':>8s} {'Lead Time':>10s} {'Type OK':>8s} {'Sev OK':>8s}"
+    )
     lines.append("-" * 70)
 
     for s in summaries:
@@ -454,16 +459,18 @@ def print_backtest_report(summaries: list[CaseBacktestSummary]) -> str:
     # Detailed per-case breakdown
     for s in summaries:
         lines.append(f"\n## {s.company_name} ({s.case_id})")
-        lines.append(f"   Deterioration: {s.deterioration_date} | "
-                      f"Lead time: {s.lead_time_days} days from first signal")
+        lines.append(
+            f"   Deterioration: {s.deterioration_date} | "
+            f"Lead time: {s.lead_time_days} days from first signal"
+        )
         lines.append("")
 
         for r in s.results:
-            status = "✅" if r.detected and r.detected_type == r.expected_type else (
-                "⚠️" if r.detected else "❌"
+            status = (
+                "✅"
+                if r.detected and r.detected_type == r.expected_type
+                else ("⚠️" if r.detected else "❌")
             )
-            type_match = r.detected_type == r.expected_type
-            sev_match = r.detected_severity == r.expected_severity
             lines.append(
                 f"   {status} {r.signal_date} — "
                 f"Expected: {r.expected_type}/{r.expected_severity} | "
@@ -472,9 +479,11 @@ def print_backtest_report(summaries: list[CaseBacktestSummary]) -> str:
             if r.error:
                 lines.append(f"      Error: {r.error}")
             if r.matched_pattern:
-                lines.append(f"      Pattern: {r.matched_pattern} "
-                             f"(conf: {r.confidence:.2f}) "
-                             f"— \"{r.matched_text or ''}\"")
+                lines.append(
+                    f"      Pattern: {r.matched_pattern} "
+                    f"(conf: {r.confidence:.2f}) "
+                    f'— "{r.matched_text or ""}"'
+                )
 
     lines.append("")
     lines.append("=" * 70)

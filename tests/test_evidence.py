@@ -1,13 +1,12 @@
 """Tests for evidence storage and event creation."""
 
-import sqlite3
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from kassandra.db import migrate, _connect
-from kassandra.evidence import store_evidence, store_event
+from kassandra.db import _connect, migrate
+from kassandra.evidence import store_event, store_evidence
 
 
 @pytest.fixture
@@ -100,9 +99,7 @@ class TestEvents:
             extraction_method="test",
             parser_version="1.0",
         )
-        temp_db.execute(
-            "INSERT INTO registry (canonical_name) VALUES (?)", ("TestCo",)
-        )
+        temp_db.execute("INSERT INTO registry (canonical_name) VALUES (?)", ("TestCo",))
         reg_id = temp_db.execute("SELECT id FROM registry").fetchone()["id"]
 
         event_result = store_event(
@@ -135,9 +132,7 @@ class TestEvents:
             extraction_method="test",
             parser_version="1.0",
         )
-        temp_db.execute(
-            "INSERT INTO registry (canonical_name) VALUES (?)", ("TestCo",)
-        )
+        temp_db.execute("INSERT INTO registry (canonical_name) VALUES (?)", ("TestCo",))
         reg_id = temp_db.execute("SELECT id FROM registry").fetchone()["id"]
 
         r1 = store_event(temp_db, ev_result.evidence_id, reg_id, "insolvency")

@@ -18,27 +18,27 @@ Design:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
 
 from kassandra.contracts import CollectionMetrics, MatchResult
-from kassandra.evidence import store_evidence, store_event
+from kassandra.evidence import store_event, store_evidence
 from kassandra.sources.entity_resolution import (
-    exact_legal_name_match, queue_unconfirmed_match, discovery_overlap,
+    discovery_overlap,
+    exact_legal_name_match,
+    queue_unconfirmed_match,
 )
 
 logger = logging.getLogger(__name__)
 
 BODACC_API_BASE = (
-    "https://www.bodacc.fr/api/explore/v2.1/catalog/datasets/"
-    "annonces-commerciales/records"
+    "https://www.bodacc.fr/api/explore/v2.1/catalog/datasets/annonces-commerciales/records"
 )
 
 # Publication families we actively monitor
@@ -68,13 +68,55 @@ def _respect_rate_limit() -> None:
 # "france", "paris", "europe" were removed (P0 fix) — stripping them collapsed
 # multi-word company names to a single generic token, causing false matches.
 FRENCH_LEGAL_SUFFIX_TOKENS: set[str] = {
-    "sa", "sas", "sasu", "sarl", "eurl", "snc", "scs", "sca", "sci",
-    "sep", "gie", "geie", "sem", "seml", "scop", "scic",
-    "association", "fondation", "mutuelle", "cooperative", "coopérative",
-    "societe", "société", "ets", "etablissements", "établissements",
-    "compagnie", "cie", "groupe", "group", "holding", "holdings",
-    "the", "and", "of", "de", "du", "des", "le", "la", "les",
-    "ltd", "limited", "plc", "bv", "nv", "gmbh", "ag", "se",
+    "sa",
+    "sas",
+    "sasu",
+    "sarl",
+    "eurl",
+    "snc",
+    "scs",
+    "sca",
+    "sci",
+    "sep",
+    "gie",
+    "geie",
+    "sem",
+    "seml",
+    "scop",
+    "scic",
+    "association",
+    "fondation",
+    "mutuelle",
+    "cooperative",
+    "coopérative",
+    "societe",
+    "société",
+    "ets",
+    "etablissements",
+    "établissements",
+    "compagnie",
+    "cie",
+    "groupe",
+    "group",
+    "holding",
+    "holdings",
+    "the",
+    "and",
+    "of",
+    "de",
+    "du",
+    "des",
+    "le",
+    "la",
+    "les",
+    "ltd",
+    "limited",
+    "plc",
+    "bv",
+    "nv",
+    "gmbh",
+    "ag",
+    "se",
 }
 
 
@@ -101,7 +143,6 @@ def _notice_matches_company(company_name: str, commercant: str) -> bool:
     commercant_tokens = set(_normalise_tokens(commercant))
 
     if len(company_tokens) == 1:
-        token = company_tokens[0]
         # Hyphenated brands: collapse and match collapsed form
         if "-" in company_name:
             collapsed_company = "".join(re.findall(r"[a-z0-9à-ÿ]+", company_name.lower()))
@@ -164,7 +205,8 @@ def _extract_official_id(notice_or_text: dict | str) -> str | None:
 # Companies whose name contains only these tokens after stripping legal suffixes
 # should never match BODACC notices without official-ID corroboration.
 _KNOWN_AMBIGUOUS_COMPANY_TOKENS: set[str] = {
-    "hermes", "delphine",
+    "hermes",
+    "delphine",
 }
 
 
@@ -243,9 +285,7 @@ def _match_notice_to_registry(
 
     # No known SIREN — try official ID from notice
     if official_id:
-        owner = db.execute(
-            "SELECT id FROM registry WHERE siren = ?", (official_id,)
-        ).fetchone()
+        owner = db.execute("SELECT id FROM registry WHERE siren = ?", (official_id,)).fetchone()
         if owner and owner["id"] == registry_id:
             return MatchResult(
                 status="confirmed",
@@ -339,6 +379,8 @@ class BodaccClient:
     def __init__(self) -> None:
         self._client = httpx.Client(
             timeout=10,
+            trust_env=False,
+            follow_redirects=False,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -371,10 +413,7 @@ class BodaccClient:
 
         for fam in families:
             params: dict[str, Any] = {
-                "where": (
-                    f"dateparution >= date'{since}' "
-                    f"and familleavis_lib = \"{fam}\""
-                ),
+                "where": (f"dateparution >= date'{since}' and familleavis_lib = \"{fam}\""),
                 "limit": limit,
                 "order_by": "dateparution DESC",
             }
@@ -386,8 +425,7 @@ class BodaccClient:
                 results = data.get("results", [])
                 all_notices.extend(results)
                 logger.info(
-                    f"BODACC fetched {len(results)} notices for family '{fam}' "
-                    f"(since {since})"
+                    f"BODACC fetched {len(results)} notices for family '{fam}' (since {since})"
                 )
             except httpx.HTTPError as e:
                 logger.error(f"BODACC fetch failed for family '{fam}': {e}")
@@ -403,8 +441,9 @@ class BodaccClient:
         matches: list[dict[str, Any]] = []
         for notice in notices:
             commercant = notice.get("commercant", "")
-            if (_extract_official_id(notice) or
-                    discovery_overlap(company_name, commercant, FRENCH_LEGAL_SUFFIX_TOKENS)):
+            if _extract_official_id(notice) or discovery_overlap(
+                company_name, commercant, FRENCH_LEGAL_SUFFIX_TOKENS
+            ):
                 matches.append(notice)
         return matches
 
@@ -418,7 +457,7 @@ class BodaccClient:
         """Store notices and return reconciled evidence/event outcomes."""
         new_evidence = duplicates = candidates = unconfirmed = 0
         events_created = duplicate_events = 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         for notice in notices:
             match_result = _match_notice_to_registry(db, notice, company_name, registry_id)
@@ -428,12 +467,22 @@ class BodaccClient:
 
             source_url = notice.get("url_complete", "") or BODACC_API_BASE
             content = json.dumps(notice, ensure_ascii=False, default=str)
-            excerpt_parts = [notice.get("commercant", ""), notice.get("familleavis_lib", ""), notice.get("dateparution", "")]
+            excerpt_parts = [
+                notice.get("commercant", ""),
+                notice.get("familleavis_lib", ""),
+                notice.get("dateparution", ""),
+            ]
             excerpt = " | ".join(p for p in excerpt_parts if p)[:500]
             ev_result = store_evidence(
-                db=db, content=content, source_url=source_url, retrieval_time=now,
-                publication_time=notice.get("dateparution"), extraction_method="bodacc_fr_api",
-                parser_version="1.0.0", content_type="application/json", excerpt=excerpt,
+                db=db,
+                content=content,
+                source_url=source_url,
+                retrieval_time=now,
+                publication_time=notice.get("dateparution"),
+                extraction_method="bodacc_fr_api",
+                parser_version="1.0.0",
+                content_type="application/json",
+                excerpt=excerpt,
                 source_reliability=1.0,
             )
             evidence_id = ev_result.evidence_id
@@ -446,14 +495,23 @@ class BodaccClient:
                 famille = notice.get("familleavis_lib", "")
                 event_type, severity = _classify_annonce(famille)
                 if event_type:
-                    description = " | ".join([
-                        f"BODACC: {notice.get('commercant', '?')}", f"Family: {famille}",
-                        f"Date: {notice.get('dateparution', '?')}",
-                    ])[:500]
+                    description = " | ".join(
+                        [
+                            f"BODACC: {notice.get('commercant', '?')}",
+                            f"Family: {famille}",
+                            f"Date: {notice.get('dateparution', '?')}",
+                        ]
+                    )[:500]
                     evt_result = store_event(
-                        db=db, evidence_id=evidence_id, registry_id=registry_id,
-                        event_type=event_type, severity=severity, confidence=0.9,
-                        description=description, source_claims_directly=True, raw_event_json=content,
+                        db=db,
+                        evidence_id=evidence_id,
+                        registry_id=registry_id,
+                        event_type=event_type,
+                        severity=severity,
+                        confidence=0.9,
+                        description=description,
+                        source_claims_directly=True,
+                        raw_event_json=content,
                     )
                     if evt_result.status == "inserted":
                         events_created += 1
@@ -462,10 +520,16 @@ class BodaccClient:
             elif match_result.is_unconfirmed_review_candidate:
                 # Count only newly queued work, not every rediscovery.
                 queued = queue_unconfirmed_match(
-                    db=db, source_name="bodacc_fr", source_entity_name=notice.get("commercant", ""),
-                    candidate_registry_id=registry_id, candidate_registry_name=company_name,
-                    match_type=match_result.match_type, match_confidence=match_result.confidence,
-                    evidence_id=evidence_id, evidence_excerpt=excerpt, reason=match_result.reason,
+                    db=db,
+                    source_name="bodacc_fr",
+                    source_entity_name=notice.get("commercant", ""),
+                    candidate_registry_id=registry_id,
+                    candidate_registry_name=company_name,
+                    match_type=match_result.match_type,
+                    match_confidence=match_result.confidence,
+                    evidence_id=evidence_id,
+                    evidence_excerpt=excerpt,
+                    reason=match_result.reason,
                 )
                 unconfirmed += int(queued)
             else:
@@ -475,9 +539,15 @@ class BodaccClient:
                 )
 
         return CollectionMetrics(
-            run_id="", source_name="bodacc_fr", discovered=len(notices),
-            fetched=new_evidence + duplicates, new_evidence=new_evidence, duplicates=duplicates,
-            candidates=candidates, unconfirmed=unconfirmed, events_created=events_created,
+            run_id="",
+            source_name="bodacc_fr",
+            discovered=len(notices),
+            fetched=new_evidence + duplicates,
+            new_evidence=new_evidence,
+            duplicates=duplicates,
+            candidates=candidates,
+            unconfirmed=unconfirmed,
+            events_created=events_created,
             duplicate_events=duplicate_events,
         )
 

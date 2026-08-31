@@ -15,6 +15,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import UTC
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,40 +28,151 @@ CLASSIFIER_VERSION = "2.1.0"
 # Each language has common function words + domain-specific keywords.
 LANG_MARKERS: dict[str, list[str]] = {
     "de": [
-        " und ", " die ", " der ", " das ", " ist ", " nicht ", " von ",
-        " mit ", " sich ", " auf ", " für ", " werden ", " ein ", " eine ",
-        " aber ", " oder ", " auch ", " kann ", " nach ", " bei ", " über ",
-        "insolvenz", "zahlungsunfähig", "umstrukturierung", "gewinnwarnung",
-        "massenentlassung", "restrukturierungsplan", "fortführungsprognose",
+        " und ",
+        " die ",
+        " der ",
+        " das ",
+        " ist ",
+        " nicht ",
+        " von ",
+        " mit ",
+        " sich ",
+        " auf ",
+        " für ",
+        " werden ",
+        " ein ",
+        " eine ",
+        " aber ",
+        " oder ",
+        " auch ",
+        " kann ",
+        " nach ",
+        " bei ",
+        " über ",
+        "insolvenz",
+        "zahlungsunfähig",
+        "umstrukturierung",
+        "gewinnwarnung",
+        "massenentlassung",
+        "restrukturierungsplan",
+        "fortführungsprognose",
     ],
     "fr": [
-        " et ", " les ", " des ", " est ", " pas ", " une ", " dans ",
-        " que ", " qui ", " par ", " sur ", " pour ", " avec ", " plus ",
-        " mais ", " dont ", " entre ", " elle ", " son ", " ses ",
-        " de ", " du ", " au ", " en ", " ce ",
-        "insolvabilité", "faillite", "restructuration", "licenciement",
-        "avertissement", "sauvegarde", "redressement", "dépôt",
+        " et ",
+        " les ",
+        " des ",
+        " est ",
+        " pas ",
+        " une ",
+        " dans ",
+        " que ",
+        " qui ",
+        " par ",
+        " sur ",
+        " pour ",
+        " avec ",
+        " plus ",
+        " mais ",
+        " dont ",
+        " entre ",
+        " elle ",
+        " son ",
+        " ses ",
+        " de ",
+        " du ",
+        " au ",
+        " en ",
+        " ce ",
+        "insolvabilité",
+        "faillite",
+        "restructuration",
+        "licenciement",
+        "avertissement",
+        "sauvegarde",
+        "redressement",
+        "dépôt",
     ],
     "nl": [
-        " en ", " van ", " de ", " het ", " een ", " niet ", " dat ",
-        " zijn ", " wordt ", " maar ", " ook ", " nog ", " heeft ",
-        " kunnen ", " bij ", " door ", " deze ", " voor ", " met ",
-        "insolventie", "faillissement", "herstructurering", "winstwaarschuwing",
-        "ontslagen", "surseance", "banenverlies",
+        " en ",
+        " van ",
+        " de ",
+        " het ",
+        " een ",
+        " niet ",
+        " dat ",
+        " zijn ",
+        " wordt ",
+        " maar ",
+        " ook ",
+        " nog ",
+        " heeft ",
+        " kunnen ",
+        " bij ",
+        " door ",
+        " deze ",
+        " voor ",
+        " met ",
+        "insolventie",
+        "faillissement",
+        "herstructurering",
+        "winstwaarschuwing",
+        "ontslagen",
+        "surseance",
+        "banenverlies",
     ],
     "it": [
-        " e ", " che ", " non ", " una ", " sono ", " per ", " con ",
-        " come ", " dei ", " della ", " degli ", " nel ", " nella ",
-        " più ", " anche ", " stato ", " hanno ", " tra ",
-        "insolvenza", "fallimento", "ristrutturazione", "licenziamenti",
-        "esuberi", "liquidazione", "concordato",
+        " e ",
+        " che ",
+        " non ",
+        " una ",
+        " sono ",
+        " per ",
+        " con ",
+        " come ",
+        " dei ",
+        " della ",
+        " degli ",
+        " nel ",
+        " nella ",
+        " più ",
+        " anche ",
+        " stato ",
+        " hanno ",
+        " tra ",
+        "insolvenza",
+        "fallimento",
+        "ristrutturazione",
+        "licenziamenti",
+        "esuberi",
+        "liquidazione",
+        "concordato",
     ],
     "es": [
-        " y ", " que ", " los ", " las ", " del ", " por ", " una ",
-        " para ", " con ", " más ", " pero ", " entre ", " como ",
-        " está ", " han ", " sido ", " esta ", " sus ",
-        "insolvencia", "quiebra", "reestructuración", "despidos",
-        "concurso", "acreedores", "expediente",
+        " y ",
+        " que ",
+        " los ",
+        " las ",
+        " del ",
+        " por ",
+        " una ",
+        " para ",
+        " con ",
+        " más ",
+        " pero ",
+        " entre ",
+        " como ",
+        " está ",
+        " han ",
+        " sido ",
+        " esta ",
+        " sus ",
+        "insolvencia",
+        "quiebra",
+        "reestructuración",
+        "despidos",
+        "concurso",
+        "acreedores",
+        "expediente",
     ],
 }
 
@@ -101,142 +213,285 @@ def detect_language(text: str) -> str:
 MULTILINGUAL_PATTERNS: dict[str, list[tuple[str, str, str, list[str]]]] = {
     # German — Insolvenz, Umstrukturierung, Gewinnwarnung, Entlassungen, Going Concern
     "de": [
-        ("insolvency", "critical", "P019-de", [
-            r"\binsolven(?:z|t)\b", r"\bzahlungsunf(?:ä|ae)hig(?:keit)?\b",
-            r"\binsolvenzantrag\b", r"\binsolvenzverfahren\b",
-            r"\b(?:eröffnet|beantragt|gestellt).{0,20}insolvenz\b",
-            r"\bgl(?:ä|ae)ubiger(?:schutz|versammlung)\b",
-        ]),
-        ("restructuring", "high", "P020-de", [
-            r"\b(?:restrukturierung|restrukturierungsplan|restrukturierungsprogramm)\b",
-            r"\bumstrukturierung\b",
-            r"\b(?:sanierung|sanierungsplan|sanierungsverfahren)\b",
-            r"\b(?:massenentlassung|stellenabbau|personalabbau)\b",
-        ]),
-        ("profit_warning", "medium", "P021-de", [
-            r"\bgewinnwarnung\b", r"\bergebniswarnung\b",
-            r"\b(?:prognose|ausblick)\s+(?:gesenkt|reduziert|korrigiert)\b",
-            r"\bumsatzwarnung\b",
-        ]),
-        ("going_concern_warning", "high", "P022-de", [
-            r"\bfort(?:führungs|bestehens)(?:prognose|risiko)\b",
-            r"\bbestandsgef(?:ä|ae)hrdung\b",
-            r"\b(?:wesentliche|erhebliche)\s+unsicherheit\b",
-        ]),
-        ("layoffs", "medium", "P023-de", [
-            r"\b(?:stellenabbau|personalabbau|massenentlassung|entlassungen?)\b",
-            r"\b(?:kurzarbeit|kurzarbeitergeld)\b",
-        ]),
+        (
+            "insolvency",
+            "critical",
+            "P019-de",
+            [
+                r"\binsolven(?:z|t)\b",
+                r"\bzahlungsunf(?:ä|ae)hig(?:keit)?\b",
+                r"\binsolvenzantrag\b",
+                r"\binsolvenzverfahren\b",
+                r"\b(?:eröffnet|beantragt|gestellt).{0,20}insolvenz\b",
+                r"\bgl(?:ä|ae)ubiger(?:schutz|versammlung)\b",
+            ],
+        ),
+        (
+            "restructuring",
+            "high",
+            "P020-de",
+            [
+                r"\b(?:restrukturierung|restrukturierungsplan|restrukturierungsprogramm)\b",
+                r"\bumstrukturierung\b",
+                r"\b(?:sanierung|sanierungsplan|sanierungsverfahren)\b",
+                r"\b(?:massenentlassung|stellenabbau|personalabbau)\b",
+            ],
+        ),
+        (
+            "profit_warning",
+            "medium",
+            "P021-de",
+            [
+                r"\bgewinnwarnung\b",
+                r"\bergebniswarnung\b",
+                r"\b(?:prognose|ausblick)\s+(?:gesenkt|reduziert|korrigiert)\b",
+                r"\bumsatzwarnung\b",
+            ],
+        ),
+        (
+            "going_concern_warning",
+            "high",
+            "P022-de",
+            [
+                r"\bfort(?:führungs|bestehens)(?:prognose|risiko)\b",
+                r"\bbestandsgef(?:ä|ae)hrdung\b",
+                r"\b(?:wesentliche|erhebliche)\s+unsicherheit\b",
+            ],
+        ),
+        (
+            "layoffs",
+            "medium",
+            "P023-de",
+            [
+                r"\b(?:stellenabbau|personalabbau|massenentlassung|entlassungen?)\b",
+                r"\b(?:kurzarbeit|kurzarbeitergeld)\b",
+            ],
+        ),
     ],
     # French — insolvabilité, restructuration, avertissement, licenciements
     "fr": [
-        ("insolvency", "critical", "P019-fr", [
-            r"\binsolvabilit(?:é|e)\b", r"\bfaillite\b",
-            r"\bd(?:é|e)p(?:ô|o)t\s+de\s+bilan\b",
-            r"\bd(?:é|e)pos(?:é|e)\s+son\s+bilan\b",
-            r"\b(?:redressement|liquidation)\s+judiciaire\b",
-            r"\bcessation\s+de\s+paiements?\b",
-            r"\bproc(?:é|e)dure\s+(?:de\s+)?sauvegarde\b",
-        ]),
-        ("restructuring", "high", "P020-fr", [
-            r"\brestructuration\b", r"\bplan\s+de\s+(?:sauvegarde|restructuration)\b",
-            r"\b(?:suppression|r(?:é|e)duction)\s+d['’]emplois?\b",
-            r"\bplan\s+social\b", r"\bplan\s+de\s+d(?:é|e)parts?\b",
-        ]),
-        ("profit_warning", "medium", "P021-fr", [
-            r"\bavertissement\s+(?:sur|de)\s+(?:r(?:é|e)sultats|b(?:é|e)n(?:é|e)fices?)\b",
-            r"\b(?:perspectives|pr(?:é|e)visions|objectifs)\s+(?:abaiss|r(?:é|e)vis|revu)\b",
-            r"\bprofit\s*warning\b",
-        ]),
-        ("going_concern_warning", "high", "P022-fr", [
-            r"\bcontinuit(?:é|e)\s+d['’]exploitation\b",
-            r"\bincertitude\s+(?:significative|importante|mat(?:é|e)rielle)\b",
-        ]),
-        ("layoffs", "medium", "P023-fr", [
-            r"\blicenciements?\b", r"\bplan\s+social\b",
-            r"\bch(?:ô|o)mage\s+(?:partiel|technique)\b",
-        ]),
+        (
+            "insolvency",
+            "critical",
+            "P019-fr",
+            [
+                r"\binsolvabilit(?:é|e)\b",
+                r"\bfaillite\b",
+                r"\bd(?:é|e)p(?:ô|o)t\s+de\s+bilan\b",
+                r"\bd(?:é|e)pos(?:é|e)\s+son\s+bilan\b",
+                r"\b(?:redressement|liquidation)\s+judiciaire\b",
+                r"\bcessation\s+de\s+paiements?\b",
+                r"\bproc(?:é|e)dure\s+(?:de\s+)?sauvegarde\b",
+            ],
+        ),
+        (
+            "restructuring",
+            "high",
+            "P020-fr",
+            [
+                r"\brestructuration\b",
+                r"\bplan\s+de\s+(?:sauvegarde|restructuration)\b",
+                r"\b(?:suppression|r(?:é|e)duction)\s+d['’]emplois?\b",
+                r"\bplan\s+social\b",
+                r"\bplan\s+de\s+d(?:é|e)parts?\b",
+            ],
+        ),
+        (
+            "profit_warning",
+            "medium",
+            "P021-fr",
+            [
+                r"\bavertissement\s+(?:sur|de)\s+(?:r(?:é|e)sultats|b(?:é|e)n(?:é|e)fices?)\b",
+                r"\b(?:perspectives|pr(?:é|e)visions|objectifs)\s+(?:abaiss|r(?:é|e)vis|revu)\b",
+                r"\bprofit\s*warning\b",
+            ],
+        ),
+        (
+            "going_concern_warning",
+            "high",
+            "P022-fr",
+            [
+                r"\bcontinuit(?:é|e)\s+d['’]exploitation\b",
+                r"\bincertitude\s+(?:significative|importante|mat(?:é|e)rielle)\b",
+            ],
+        ),
+        (
+            "layoffs",
+            "medium",
+            "P023-fr",
+            [
+                r"\blicenciements?\b",
+                r"\bplan\s+social\b",
+                r"\bch(?:ô|o)mage\s+(?:partiel|technique)\b",
+            ],
+        ),
     ],
     # Dutch — insolventie, herstructurering, winstwaarschuwing, ontslagen
     "nl": [
-        ("insolvency", "critical", "P019-nl", [
-            r"\binsolvent(?:ie|e|verklaard)\b", r"\bfaillissement\b",
-            r"\b(?:failliet|faillietverklaring)\b",
-            r"\bsurseance\s+van\s+betaling\b",
-            r"\buitstel\s+van\s+betaling\b",
-        ]),
-        ("restructuring", "high", "P020-nl", [
-            r"\bherstructurer(?:ing|en)\b", r"\breorganis(?:atie|eren)\b",
-            r"\b(?:massaontslag|banenverlies|personeelsreductie)\b",
-            r"\bsaneringsplan\b",
-        ]),
-        ("profit_warning", "medium", "P021-nl", [
-            r"\bwinstwaarschuwing\b", r"\bresultaatwaarschuwing\b",
-            r"\b(?:prognose|verwachting|outlook)\s+(?:verlaagd|bijgesteld|neerwaarts)\b",
-        ]),
-        ("going_concern_warning", "high", "P022-nl", [
-            r"\bcontinu(?:ï|i)teit(?:svraagstuk|sprobleem|srisico)\b",
-            r"\b(?:materi(?:ë|e)le|aanzienlijke)\s+onzekerheid\b",
-            r"\bgoing\s*concern\b.*\b(?:onzeker|probleem|risico)\b",
-        ]),
-        ("layoffs", "medium", "P023-nl", [
-            r"\bontslag(?:en|ronde)?\b", r"\bmassaontslag\b",
-            r"\b(?:banen|personeel)\s+(?:schrappen|verdwijnen|verlies)\b",
-        ]),
+        (
+            "insolvency",
+            "critical",
+            "P019-nl",
+            [
+                r"\binsolvent(?:ie|e|verklaard)\b",
+                r"\bfaillissement\b",
+                r"\b(?:failliet|faillietverklaring)\b",
+                r"\bsurseance\s+van\s+betaling\b",
+                r"\buitstel\s+van\s+betaling\b",
+            ],
+        ),
+        (
+            "restructuring",
+            "high",
+            "P020-nl",
+            [
+                r"\bherstructurer(?:ing|en)\b",
+                r"\breorganis(?:atie|eren)\b",
+                r"\b(?:massaontslag|banenverlies|personeelsreductie)\b",
+                r"\bsaneringsplan\b",
+            ],
+        ),
+        (
+            "profit_warning",
+            "medium",
+            "P021-nl",
+            [
+                r"\bwinstwaarschuwing\b",
+                r"\bresultaatwaarschuwing\b",
+                r"\b(?:prognose|verwachting|outlook)\s+(?:verlaagd|bijgesteld|neerwaarts)\b",
+            ],
+        ),
+        (
+            "going_concern_warning",
+            "high",
+            "P022-nl",
+            [
+                r"\bcontinu(?:ï|i)teit(?:svraagstuk|sprobleem|srisico)\b",
+                r"\b(?:materi(?:ë|e)le|aanzienlijke)\s+onzekerheid\b",
+                r"\bgoing\s*concern\b.*\b(?:onzeker|probleem|risico)\b",
+            ],
+        ),
+        (
+            "layoffs",
+            "medium",
+            "P023-nl",
+            [
+                r"\bontslag(?:en|ronde)?\b",
+                r"\bmassaontslag\b",
+                r"\b(?:banen|personeel)\s+(?:schrappen|verdwijnen|verlies)\b",
+            ],
+        ),
     ],
     # Italian — insolvenza, ristrutturazione, profit warning, licenziamenti
     "it": [
-        ("insolvency", "critical", "P019-it", [
-            r"\binsolvenza\b", r"\bfallimento\b", r"\bliquidazione\b",
-            r"\b(?:concordato|amministrazione)\s+(?:preventivo|straordinaria|controllata)\b",
-            r"\bstato\s+di\s+(?:insolvenza|crisi)\b",
-        ]),
-        ("restructuring", "high", "P020-it", [
-            r"\bristrutturazion(?:e|i)\b", r"\bpiano\s+di\s+(?:risanamento|ristrutturazione)\b",
-            r"\b(?:esuberi|tagli)\s+(?:di|del)\s+personal[eo]\b",
-            r"\bcassa\s+integrazione\b",
-        ]),
-        ("profit_warning", "medium", "P021-it", [
-            r"\bprofit\s*warning\b", r"\ballerta\s+(?:utili|risultati)\b",
-            r"\b(?:previsioni|stime|guidance)\s+(?:ridott|rivist|tagliat)\b",
-        ]),
-        ("going_concern_warning", "high", "P022-it", [
-            r"\bcontinuit(?:à|a)\s+aziendale\b",
-            r"\b(?:significativa|rilevante|sostanziale)\s+incertezza\b",
-        ]),
-        ("layoffs", "medium", "P023-it", [
-            r"\blicenziament[io]\b", r"\besuber[io]\b",
-            r"\b(?:tagli|riduzioni?)\s+(?:al|del)\s+personal[eo]\b",
-        ]),
+        (
+            "insolvency",
+            "critical",
+            "P019-it",
+            [
+                r"\binsolvenza\b",
+                r"\bfallimento\b",
+                r"\bliquidazione\b",
+                r"\b(?:concordato|amministrazione)\s+(?:preventivo|straordinaria|controllata)\b",
+                r"\bstato\s+di\s+(?:insolvenza|crisi)\b",
+            ],
+        ),
+        (
+            "restructuring",
+            "high",
+            "P020-it",
+            [
+                r"\bristrutturazion(?:e|i)\b",
+                r"\bpiano\s+di\s+(?:risanamento|ristrutturazione)\b",
+                r"\b(?:esuberi|tagli)\s+(?:di|del)\s+personal[eo]\b",
+                r"\bcassa\s+integrazione\b",
+            ],
+        ),
+        (
+            "profit_warning",
+            "medium",
+            "P021-it",
+            [
+                r"\bprofit\s*warning\b",
+                r"\ballerta\s+(?:utili|risultati)\b",
+                r"\b(?:previsioni|stime|guidance)\s+(?:ridott|rivist|tagliat)\b",
+            ],
+        ),
+        (
+            "going_concern_warning",
+            "high",
+            "P022-it",
+            [
+                r"\bcontinuit(?:à|a)\s+aziendale\b",
+                r"\b(?:significativa|rilevante|sostanziale)\s+incertezza\b",
+            ],
+        ),
+        (
+            "layoffs",
+            "medium",
+            "P023-it",
+            [
+                r"\blicenziament[io]\b",
+                r"\besuber[io]\b",
+                r"\b(?:tagli|riduzioni?)\s+(?:al|del)\s+personal[eo]\b",
+            ],
+        ),
     ],
     # Spanish — insolvencia, reestructuración, profit warning, despidos
     "es": [
-        ("insolvency", "critical", "P019-es", [
-            r"\binsolvencia\b", r"\bquiebra\b",
-            r"\bconcurso\s+(?:de|voluntario|necesario)\s+(?:de\s+)?acreedores\b",
-            r"\bdeclaraci(?:ó|o)n\s+de\s+(?:insolvencia|concurso|quiebra)\b",
-            r"\bpreconcurso\b",
-        ]),
-        ("restructuring", "high", "P020-es", [
-            r"\breestructuraci(?:ó|o)n\b",
-            r"\b(?:plan|programa)\s+de\s+reestructuraci(?:ó|o)n\b",
-            r"\b(?:despidos?|expediente)\s+(?:colectivo|de\s+regulaci(?:ó|o)n)\b",
-            r"\b(?:ere|erte)\b",
-        ]),
-        ("profit_warning", "medium", "P021-es", [
-            r"\badvertencia\s+(?:de|sobre)\s+(?:beneficios|resultados)\b",
-            r"\bprofit\s*warning\b",
-            r"\b(?:previsiones|estimaciones|gu(?:í|i)as?)\s+(?:reduc|revis|recort)\b",
-        ]),
-        ("going_concern_warning", "high", "P022-es", [
-            r"\bempresa\s+en\s+funcionamiento\b",
-            r"\b(?:duda|incertidumbre)\s+(?:sustancial|significativa|material)\b.{0,30}\bcontinuidad\b",
-            r"\bincertidumbre\s+(?:significativa|material)\b",
-        ]),
-        ("layoffs", "medium", "P023-es", [
-            r"\bdespidos?\b", r"\bexpediente\s+(?:de\s+regulaci(?:ó|o)n|colectivo)\b",
-            r"\b(?:ere|erte)\b",
-        ]),
+        (
+            "insolvency",
+            "critical",
+            "P019-es",
+            [
+                r"\binsolvencia\b",
+                r"\bquiebra\b",
+                r"\bconcurso\s+(?:de|voluntario|necesario)\s+(?:de\s+)?acreedores\b",
+                r"\bdeclaraci(?:ó|o)n\s+de\s+(?:insolvencia|concurso|quiebra)\b",
+                r"\bpreconcurso\b",
+            ],
+        ),
+        (
+            "restructuring",
+            "high",
+            "P020-es",
+            [
+                r"\breestructuraci(?:ó|o)n\b",
+                r"\b(?:plan|programa)\s+de\s+reestructuraci(?:ó|o)n\b",
+                r"\b(?:despidos?|expediente)\s+(?:colectivo|de\s+regulaci(?:ó|o)n)\b",
+                r"\b(?:ere|erte)\b",
+            ],
+        ),
+        (
+            "profit_warning",
+            "medium",
+            "P021-es",
+            [
+                r"\badvertencia\s+(?:de|sobre)\s+(?:beneficios|resultados)\b",
+                r"\bprofit\s*warning\b",
+                r"\b(?:previsiones|estimaciones|gu(?:í|i)as?)\s+(?:reduc|revis|recort)\b",
+            ],
+        ),
+        (
+            "going_concern_warning",
+            "high",
+            "P022-es",
+            [
+                r"\bempresa\s+en\s+funcionamiento\b",
+                r"\b(?:duda|incertidumbre)\s+(?:sustancial|significativa|material)\b.{0,30}\bcontinuidad\b",
+                r"\bincertidumbre\s+(?:significativa|material)\b",
+            ],
+        ),
+        (
+            "layoffs",
+            "medium",
+            "P023-es",
+            [
+                r"\bdespidos?\b",
+                r"\bexpediente\s+(?:de\s+regulaci(?:ó|o)n|colectivo)\b",
+                r"\b(?:ere|erte)\b",
+            ],
+        ),
     ],
 }
 
@@ -293,149 +548,280 @@ NEGATIVE_PATTERNS: dict[str, list[str]] = {
 }
 
 EVENT_PATTERNS: list[tuple[str, str, str, list[str]]] = [
-    ("insolvency", "critical", "P001", [
-        r"\binsolven(?:t|cy)\b", r"\bbankruptcy\b", r"\bchapter\s*11\b",
-        r"\bwinding[-\s]*up\b", r"\bliquidation\b", r"\badministration\s+order\b",
-        r"\bcreditors[-\s]*(?:meeting|protection)\b", r"\breceivership\b",
-        r"\bdissolution\b", r"\bstrike[-\s]*off\b",
-        r"\benter(?:ed|s)\s+(?:administration|compulsory\s+liquidation)\b",
-        r"\bfiled\s+for\s+(?:insolvency|bankruptcy|administration|chapter\s*11)\b",
-        r"\bno\s+choice\s+but\s+to\s+(?:enter|take\s+steps\s+to\s+enter)\b",
-    ]),
-    ("restructuring", "high", "P002", [
-        r"\brestructuring\s+(?:plan|program|charge)\b", r"\breorganization\b",
-        r"\bcapital\s+reduction\b", r"\bdebt\s+restructuring\b",
-        r"\bcost[-\s]*cutting\s+program\b", r"\btransformation\s+program\b",
-        r"\bseverance\s+(?:program|plan)\b", r"\bvoluntary\s+arrangement\b",
-        r"\bdeleveraging\s+plan\b", r"\bdebt[-\s]*for[-\s]*equity\b",
-        r"\b(?:lenders|creditors)\s+(?:take|taking)\s+control\b",
-        r"\b(?:reject|rejected)\s+(?:restructur|deleverag|rescue)\b",
-    ]),
-    ("going_concern_warning", "high", "P003", [
-        r"\bgoing\s*concern\b", r"\bmaterial\s*uncertainty\b",
-        r"\bsubstantial\s*doubt.*continue\b",
-        r"\bability\s*to\s*continue.*going\s*concern\b",
-    ]),
-
+    (
+        "insolvency",
+        "critical",
+        "P001",
+        [
+            r"\binsolven(?:t|cy)\b",
+            r"\bbankruptcy\b",
+            r"\bchapter\s*11\b",
+            r"\bwinding[-\s]*up\b",
+            r"\bliquidation\b",
+            r"\badministration\s+order\b",
+            r"\bcreditors[-\s]*(?:meeting|protection)\b",
+            r"\breceivership\b",
+            r"\bdissolution\b",
+            r"\bstrike[-\s]*off\b",
+            r"\benter(?:ed|s)\s+(?:administration|compulsory\s+liquidation)\b",
+            r"\bfiled\s+for\s+(?:insolvency|bankruptcy|administration|chapter\s*11)\b",
+            r"\bno\s+choice\s+but\s+to\s+(?:enter|take\s+steps\s+to\s+enter)\b",
+        ],
+    ),
+    (
+        "restructuring",
+        "high",
+        "P002",
+        [
+            r"\brestructuring\s+(?:plan|program|charge)\b",
+            r"\breorganization\b",
+            r"\bcapital\s+reduction\b",
+            r"\bdebt\s+restructuring\b",
+            r"\bcost[-\s]*cutting\s+program\b",
+            r"\btransformation\s+program\b",
+            r"\bseverance\s+(?:program|plan)\b",
+            r"\bvoluntary\s+arrangement\b",
+            r"\bdeleveraging\s+plan\b",
+            r"\bdebt[-\s]*for[-\s]*equity\b",
+            r"\b(?:lenders|creditors)\s+(?:take|taking)\s+control\b",
+            r"\b(?:reject|rejected)\s+(?:restructur|deleverag|rescue)\b",
+        ],
+    ),
+    (
+        "going_concern_warning",
+        "high",
+        "P003",
+        [
+            r"\bgoing\s*concern\b",
+            r"\bmaterial\s*uncertainty\b",
+            r"\bsubstantial\s*doubt.*continue\b",
+            r"\bability\s*to\s*continue.*going\s*concern\b",
+        ],
+    ),
     # High severity
-    ("profit_warning", "medium", "P004", [
-        r"\bprofit\s*warning\b", r"\bearnings\s*warning\b",
-        r"\blower\s*(?:than|ed).*(?:guidance|outlook|forecast|expectation)\b",
-        r"\brevenue\s*warning\b", r"\bdownward\s*revision\b",
-        r"\bguidance\s*(?:cut|reduc|lower)\b",
-        r"\b(?:cautious|weaker|deteriorat(?:ing|ed)?)\s+(?:trading|market|demand)\s+(?:outlook|conditions?)\b",
-        r"\b(?:dividend|payout)\s+(?:suspend|cut|cancelled|scrapped)\b",
-        r"\bwrite[-\s]down\b.*\b(?:million|billion)\b",
-        r"\b(?:provision|charge)s?\b.*\b(?:million|billion)\b",
-        r"\bnet\s+debt\s+higher\s+than\b",
-        r"\b(?:further|additional)\s+(?:contract|provision|write[-\s]?down)s?\b",
-    ]),
-    ("payment_stress", "high", "P005", [
-        r"\bcovenant\s*(?:breach|waiver|amendment)\b", r"\bdefault\s+notice\b",
-        r"\bpayment\s+default\b", r"\bdebt\s+default\b",
-        r"\bcredit\s+rating\s+(?:downgrade|negative\s+watch)\b",
-        r"\b(?:elevated|material|acute|near[-\s]?term)\s+refinancing\s+risk\b",
-        r"\brefinancing\s+risk\b.*\b(?:covenant|maturity|liquidity|default|downgrade|waiver)\b",
-        r"\bliquidity\s+(?:crisis|concern|shortfall)\b",
-        r"\bcash\s+(?:position|balance)\s+(?:is|of)\s+(?:only\s+)?£?[0-9.,]+\s*(?:m|million|k|thousand)",
-        r"\b(?:actual|real)\s+cash\b",
-    ]),
-    ("refinancing_stress", "high", "P005b", [
-        r"\b(?:bailout|rescue)\s+(?:talks|package|deal|loan|facility)\b",
-        r"\bcontingency\s+facility\b", r"\bemergency\s+(?:funding|loan|facility)\b",
-        r"\b(?:banks|lenders)\s+(?:demand|require).*\b(?:additional|extra|further)\b",
-        r"\b(?:rescue|bailout)\s+(?:talks|negotiations)\s+(?:collapse|fail|break)\b",
-        r"\brecapitalis(?:ation|e)\b",
-    ]),
-    ("layoffs", "medium", "P006", [
-        r"\blay[-\s]+\s*off\b", r"\bredundan(?:t|cy|cies)\b", r"\bjob\s*cut\b",
-        r"\bworkforce\s*reduction\b", r"\bheadcount\s*reduction\b",
-        r"\bstaff\s*reduction\b", r"\bdownsiz\b", r"\bshort[-\s]time\s*work\b",
-    ]),
+    (
+        "profit_warning",
+        "medium",
+        "P004",
+        [
+            r"\bprofit\s*warning\b",
+            r"\bearnings\s*warning\b",
+            r"\blower\s*(?:than|ed).*(?:guidance|outlook|forecast|expectation)\b",
+            r"\brevenue\s*warning\b",
+            r"\bdownward\s*revision\b",
+            r"\bguidance\s*(?:cut|reduc|lower)\b",
+            r"\b(?:cautious|weaker|deteriorat(?:ing|ed)?)\s+(?:trading|market|demand)\s+(?:outlook|conditions?)\b",
+            r"\b(?:dividend|payout)\s+(?:suspend|cut|cancelled|scrapped)\b",
+            r"\bwrite[-\s]down\b.*\b(?:million|billion)\b",
+            r"\b(?:provision|charge)s?\b.*\b(?:million|billion)\b",
+            r"\bnet\s+debt\s+higher\s+than\b",
+            r"\b(?:further|additional)\s+(?:contract|provision|write[-\s]?down)s?\b",
+        ],
+    ),
+    (
+        "payment_stress",
+        "high",
+        "P005",
+        [
+            r"\bcovenant\s*(?:breach|waiver|amendment)\b",
+            r"\bdefault\s+notice\b",
+            r"\bpayment\s+default\b",
+            r"\bdebt\s+default\b",
+            r"\bcredit\s+rating\s+(?:downgrade|negative\s+watch)\b",
+            r"\b(?:elevated|material|acute|near[-\s]?term)\s+refinancing\s+risk\b",
+            r"\brefinancing\s+risk\b.*\b(?:covenant|maturity|liquidity|default|downgrade|waiver)\b",
+            r"\bliquidity\s+(?:crisis|concern|shortfall)\b",
+            r"\bcash\s+(?:position|balance)\s+(?:is|of)\s+(?:only\s+)?£?[0-9.,]+\s*(?:m|million|k|thousand)",
+            r"\b(?:actual|real)\s+cash\b",
+        ],
+    ),
+    (
+        "refinancing_stress",
+        "high",
+        "P005b",
+        [
+            r"\b(?:bailout|rescue)\s+(?:talks|package|deal|loan|facility)\b",
+            r"\bcontingency\s+facility\b",
+            r"\bemergency\s+(?:funding|loan|facility)\b",
+            r"\b(?:banks|lenders)\s+(?:demand|require).*\b(?:additional|extra|further)\b",
+            r"\b(?:rescue|bailout)\s+(?:talks|negotiations)\s+(?:collapse|fail|break)\b",
+            r"\brecapitalis(?:ation|e)\b",
+        ],
+    ),
+    (
+        "layoffs",
+        "medium",
+        "P006",
+        [
+            r"\blay[-\s]+\s*off\b",
+            r"\bredundan(?:t|cy|cies)\b",
+            r"\bjob\s*cut\b",
+            r"\bworkforce\s*reduction\b",
+            r"\bheadcount\s*reduction\b",
+            r"\bstaff\s*reduction\b",
+            r"\bdownsiz\b",
+            r"\bshort[-\s]time\s*work\b",
+        ],
+    ),
     # P006b: exclude sports "injury layoff" context
     # (handled by pattern specificity — injury layoff won't match corporate patterns)
-
     # Medium severity
-    ("management_departure", "low", "P007", [
-        r"\b(?:ceo|cfo|chief\s+\w+\s+officer|chairman|president)\s+(?:resign|step\s*down|depart|leav|exit)\b",
-        r"\bexecutive\s+(?:resign|departure|exit)\b",
-    ]),
-    ("auditor_departure", "medium", "P008", [
-        r"\bauditor\s+(?:resign|removal|departure|dismiss)\b",
-        r"\bresignation\s+of\s+(?:the\s+)?auditor\b",
-        r"\b(?:external|independent)\s+auditor\s+(?:resign|step\s*down|refuses\s+to\s+sign)\b",
-        r"\b(?:refuses|refused)\s+to\s+sign\s+off\b",
-    ]),
-    ("auditor_warning", "high", "P008b", [
-        r"\b(?:qualified|adverse)\s+audit\s+(?:report|opinion)\b",
-        r"\bunable\s+to\s+verify\b",
-        r"\bcannot\s+(?:be\s+)?verif(?:y|ied)\b",
-        r"\bspecial\s+audit\b.*\b(?:find|found|report)\b",
-        r"\bauditor\s+(?:warn|flag|raise|identif)\b",
-    ]),
-    ("regulatory_action", "high", "P009", [
-        r"\bregulatory\s+(?:action|fine|penalty|investigation|enforcement)\b",
-        r"\bantitrust\s+(?:investigation|fine)\b", r"\bcompetition\s+authority\b",
-        r"\bdoj\s+(?:investigation|subpoena)\b", r"\bsec\s+(?:investigation|fine)\b",
-        r"\bdata\s+protection\s+(?:fine|breach|investigation)\b",
-    ]),
-    ("cyber_incident", "high", "P010", [
-        r"\bcyber\s*(?:attack|breach)\b", r"\bramsomware\b",
-        r"\bdata\s*breach\b", r"\bhack(?:ed|ing)\b",
-        r"\bunauthorized\s+access\b",
-        r"\b(?:suffered|experienced|reported|disclosed|detected|confirmed)\s+.*\bcyber",
-        r"\bsecurity\s+(?:incident|breach)\s+(?:at|on|in)\b",
-    ]),
+    (
+        "management_departure",
+        "low",
+        "P007",
+        [
+            r"\b(?:ceo|cfo|chief\s+\w+\s+officer|chairman|president)\s+(?:resign|step\s*down|depart|leav|exit)\b",
+            r"\bexecutive\s+(?:resign|departure|exit)\b",
+        ],
+    ),
+    (
+        "auditor_departure",
+        "medium",
+        "P008",
+        [
+            r"\bauditor\s+(?:resign|removal|departure|dismiss)\b",
+            r"\bresignation\s+of\s+(?:the\s+)?auditor\b",
+            r"\b(?:external|independent)\s+auditor\s+(?:resign|step\s*down|refuses\s+to\s+sign)\b",
+            r"\b(?:refuses|refused)\s+to\s+sign\s+off\b",
+        ],
+    ),
+    (
+        "auditor_warning",
+        "high",
+        "P008b",
+        [
+            r"\b(?:qualified|adverse)\s+audit\s+(?:report|opinion)\b",
+            r"\bunable\s+to\s+verify\b",
+            r"\bcannot\s+(?:be\s+)?verif(?:y|ied)\b",
+            r"\bspecial\s+audit\b.*\b(?:find|found|report)\b",
+            r"\bauditor\s+(?:warn|flag|raise|identif)\b",
+        ],
+    ),
+    (
+        "regulatory_action",
+        "high",
+        "P009",
+        [
+            r"\bregulatory\s+(?:action|fine|penalty|investigation|enforcement)\b",
+            r"\bantitrust\s+(?:investigation|fine)\b",
+            r"\bcompetition\s+authority\b",
+            r"\bdoj\s+(?:investigation|subpoena)\b",
+            r"\bsec\s+(?:investigation|fine)\b",
+            r"\bdata\s+protection\s+(?:fine|breach|investigation)\b",
+        ],
+    ),
+    (
+        "cyber_incident",
+        "high",
+        "P010",
+        [
+            r"\bcyber\s*(?:attack|breach)\b",
+            r"\bramsomware\b",
+            r"\bdata\s*breach\b",
+            r"\bhack(?:ed|ing)\b",
+            r"\bunauthorized\s+access\b",
+            r"\b(?:suffered|experienced|reported|disclosed|detected|confirmed)\s+.*\bcyber",
+            r"\bsecurity\s+(?:incident|breach)\s+(?:at|on|in)\b",
+        ],
+    ),
     # P010b: exclude surveys ("one in two companies reported") from real incidents
-    ("litigation_material", "medium", "P011", [
-        r"\bclass\s*action\b", r"\blawsuit\b", r"\blitigation\b",
-        r"\blegal\s+proceeding\b", r"\bcourt\s+(?:ruling|order)\b",
-        r"\bsettlement\s+(?:payment|agreement)\b", r"\bdamages\s+award\b",
-        r"\b(?:investigation|probe)\s+(?:alleges|finds|reveals|discovers)\s+(?:fraud|fraudulent|misconduct|irregularit)",
-        r"\b(?:arrested|charged)\s+(?:on|with)\s+(?:fraud|bribery|corruption|money\s+laundering)",
-        r"\b(?:ceo|executive|director|officer)\b.*\b(?:arrested|detained|charged)\b",
-        r"\bfraudulent\s+(?:accounting|financial|trading)\b",
-        r"\baccounting\s+irregularit",
-    ]),
-
+    (
+        "litigation_material",
+        "medium",
+        "P011",
+        [
+            r"\bclass\s*action\b",
+            r"\blawsuit\b",
+            r"\blitigation\b",
+            r"\blegal\s+proceeding\b",
+            r"\bcourt\s+(?:ruling|order)\b",
+            r"\bsettlement\s+(?:payment|agreement)\b",
+            r"\bdamages\s+award\b",
+            r"\b(?:investigation|probe)\s+(?:alleges|finds|reveals|discovers)\s+(?:fraud|fraudulent|misconduct|irregularit)",
+            r"\b(?:arrested|charged)\s+(?:on|with)\s+(?:fraud|bribery|corruption|money\s+laundering)",
+            r"\b(?:ceo|executive|director|officer)\b.*\b(?:arrested|detained|charged)\b",
+            r"\bfraudulent\s+(?:accounting|financial|trading)\b",
+            r"\baccounting\s+irregularit",
+        ],
+    ),
     # Lower severity
-    ("hiring_freeze", "low", "P012", [
-        r"\bhiring\s*freeze\b", r"\brecruitment\s*freeze\b",
-        r"\bsuspension\s*of\s*hiring\b",
-    ]),
-    ("facility_closure", "high", "P013", [
-        r"\b(?:plant|facility|factory|site|office)\s+(?:closure|closing|shutdown|shut\s*down)\b",
-        r"\bproduction\s+(?:halt|interruption|stoppage)\b",
-    ]),
-    ("contract_loss", "medium", "P014", [
-        r"\bcontract\s+(?:loss|lost|termination|cancellation)\b",
-        r"\bcustomer\s+(?:loss|lost|termination)\b",
-        r"\b(?:lost|lose)\s+(?:major|key|significant)\s+(?:customer|contract|client)\b",
-    ]),
-    ("recall", "medium", "P015", [
-        r"\bproduct\s*recall\b", r"\bsafety\s*recall\b",
-        r"\bvoluntary\s*recall\b", r"\bwithdrawal\s+of\s+product\b",
-    ]),
-    ("environmental_incident", "medium", "P016", [
-        r"\boil\s*spill\b", r"\bchemical\s*(?:spill|leak)\b",
-        r"\benvironmental\s+(?:incident|disaster|damage|breach)\b",
-        r"\bpollution\s+(?:incident|event)\b",
-    ]),
-
+    (
+        "hiring_freeze",
+        "low",
+        "P012",
+        [
+            r"\bhiring\s*freeze\b",
+            r"\brecruitment\s*freeze\b",
+            r"\bsuspension\s*of\s*hiring\b",
+        ],
+    ),
+    (
+        "facility_closure",
+        "high",
+        "P013",
+        [
+            r"\b(?:plant|facility|factory|site|office)\s+(?:closure|closing|shutdown|shut\s*down)\b",
+            r"\bproduction\s+(?:halt|interruption|stoppage)\b",
+        ],
+    ),
+    (
+        "contract_loss",
+        "medium",
+        "P014",
+        [
+            r"\bcontract\s+(?:loss|lost|termination|cancellation)\b",
+            r"\bcustomer\s+(?:loss|lost|termination)\b",
+            r"\b(?:lost|lose)\s+(?:major|key|significant)\s+(?:customer|contract|client)\b",
+        ],
+    ),
+    (
+        "recall",
+        "medium",
+        "P015",
+        [
+            r"\bproduct\s*recall\b",
+            r"\bsafety\s*recall\b",
+            r"\bvoluntary\s*recall\b",
+            r"\bwithdrawal\s+of\s+product\b",
+        ],
+    ),
+    (
+        "environmental_incident",
+        "medium",
+        "P016",
+        [
+            r"\boil\s*spill\b",
+            r"\bchemical\s*(?:spill|leak)\b",
+            r"\benvironmental\s+(?:incident|disaster|damage|breach)\b",
+            r"\bpollution\s+(?:incident|event)\b",
+        ],
+    ),
     # Positive/unconfirmed
-    ("contract_win", "low", "P017", [
-        r"\bcontract\s+(?:win|award|signing)\b",
-        r"\bnew\s+(?:major|key)\s+customer\b",
-    ]),
-    ("unconfirmed_adverse", "low", "P018", [
-        r"\breportedly\s+(?:faces|facing|headed|heading|set\s+to|going\s+to|planning|considering)",
-        r"\b(?:rumour|speculation)\b.*\b(?:insolven|bankrupt|restructur|layoff|default)\b",
-        r"\b(?:sources|people\s+familiar)\s+(?:say|claim|report|indicate)\b",
-    ]),
+    (
+        "contract_win",
+        "low",
+        "P017",
+        [
+            r"\bcontract\s+(?:win|award|signing)\b",
+            r"\bnew\s+(?:major|key)\s+customer\b",
+        ],
+    ),
+    (
+        "unconfirmed_adverse",
+        "low",
+        "P018",
+        [
+            r"\breportedly\s+(?:faces|facing|headed|heading|set\s+to|going\s+to|planning|considering)",
+            r"\b(?:rumour|speculation)\b.*\b(?:insolven|bankrupt|restructur|layoff|default)\b",
+            r"\b(?:sources|people\s+familiar)\s+(?:say|claim|report|indicate)\b",
+        ],
+    ),
 ]
 
 
 # ── Instrumentation ────────────────────────────────────────────────────────────
+
 
 @dataclass
 class ClassifierRun:
@@ -525,6 +911,7 @@ class ClassifierRun:
 
 # ── Core classification ───────────────────────────────────────────────────────
 
+
 def _make_event(
     event_type: str,
     severity: str,
@@ -602,7 +989,7 @@ def _chunk_text(text: str, chunk_size: int = 3000, overlap: int = 500) -> list[t
     offset = 0
 
     while offset < len(text):
-        chunk = text[offset:offset + chunk_size]
+        chunk = text[offset : offset + chunk_size]
         chunks.append((chunk, offset))
         offset += chunk_size - overlap
         if offset >= len(text):
@@ -781,7 +1168,7 @@ def extract_events_from_evidence(
 
     Returns count of new events created.
     """
-    from kassandra.evidence import store_event, get_evidence_path
+    from kassandra.evidence import get_evidence_path, store_event
 
     row = db.execute(
         "SELECT content_hash, excerpt, source_url, content_type, content_length "
@@ -812,6 +1199,7 @@ def extract_events_from_evidence(
                 if is_html:
                     try:
                         from bs4 import BeautifulSoup
+
                         soup = BeautifulSoup(raw_text, "html.parser")
                         # Remove script/style/nav/footer/header — boilerplate, not adverse content
                         for tag in soup(["script", "style", "nav", "footer", "header"]):
@@ -833,15 +1221,13 @@ def extract_events_from_evidence(
                 )
             except Exception as e:
                 logger.warning(
-                    f"Failed to load full evidence content: {e}, "
-                    f"falling back to excerpt"
+                    f"Failed to load full evidence content: {e}, falling back to excerpt"
                 )
 
     if not text_to_classify:
         text_to_classify = row["excerpt"] or ""
         logger.debug(
-            f"Classifying excerpt ({len(text_to_classify)} chars) "
-            f"for evidence {evidence_id}"
+            f"Classifying excerpt ({len(text_to_classify)} chars) for evidence {evidence_id}"
         )
 
     events = classify_content(text_to_classify, row["source_url"])
@@ -867,6 +1253,7 @@ def extract_events_from_evidence(
 
 # ── Database-backed classifier run recording ──────────────────────────────────
 
+
 def record_classifier_run(
     db: Any,
     run_id: str,
@@ -887,9 +1274,9 @@ def record_classifier_run(
 
     Returns the row id of the inserted classifier_runs row.
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     cursor = db.execute(
         """INSERT INTO classifier_runs
            (run_id, source_name, language,
@@ -1002,9 +1389,7 @@ def get_classifier_yield_report(db: Any) -> dict[str, Any]:
     overall_yield = None
     if grand_totals["documents_classified"] > 0:
         overall_yield = round(
-            grand_totals["accepted_events"]
-            / grand_totals["documents_classified"]
-            * 100,
+            grand_totals["accepted_events"] / grand_totals["documents_classified"] * 100,
             1,
         )
 

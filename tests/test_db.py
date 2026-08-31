@@ -1,12 +1,11 @@
 """Tests for Kassandra database and migrations."""
 
-import sqlite3
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from kassandra.db import SCHEMA_VERSION, migrate, _connect
+from kassandra.db import SCHEMA_VERSION, _connect, migrate
 
 
 @pytest.fixture
@@ -64,8 +63,12 @@ class TestMigrations:
         assert migrate(temp_db) == SCHEMA_VERSION
         columns = {row["name"] for row in temp_db.execute("PRAGMA table_info(source_runs)")}
         assert {
-            "duplicate_documents", "candidates_generated", "unconfirmed_matches",
-            "events_created", "duplicate_events", "errors",
+            "duplicate_documents",
+            "candidates_generated",
+            "unconfirmed_matches",
+            "events_created",
+            "duplicate_events",
+            "errors",
         }.issubset(columns)
 
     def test_all_tables_exist(self, temp_db):
@@ -76,11 +79,24 @@ class TestMigrations:
         ).fetchall()
         table_names = {t["name"] for t in tables}
         expected = {
-            "schema_version", "portfolios", "portfolio_items",
-            "registry", "registry_aliases", "evidence", "events",
-            "edges", "scores", "sources", "job_state", "journal",
-            "web_cache", "economic_entities", "graph_collection_state",
-            "classifier_runs", "source_runs", "unconfirmed_match_queue",
+            "schema_version",
+            "portfolios",
+            "portfolio_items",
+            "registry",
+            "registry_aliases",
+            "evidence",
+            "events",
+            "edges",
+            "scores",
+            "sources",
+            "job_state",
+            "journal",
+            "web_cache",
+            "economic_entities",
+            "graph_collection_state",
+            "classifier_runs",
+            "source_runs",
+            "unconfirmed_match_queue",
             "scoring_runs",
         }
         assert expected.issubset(table_names), f"Missing: {expected - table_names}"
@@ -88,9 +104,7 @@ class TestMigrations:
     def test_portfolio_insert(self, temp_db):
         """Can insert and query portfolio items."""
         migrate(temp_db)
-        temp_db.execute(
-            "INSERT INTO portfolios (name) VALUES (?)", ("Test Portfolio",)
-        )
+        temp_db.execute("INSERT INTO portfolios (name) VALUES (?)", ("Test Portfolio",))
         portfolio_id = temp_db.execute(
             "SELECT id FROM portfolios WHERE name = ?", ("Test Portfolio",)
         ).fetchone()["id"]
@@ -153,9 +167,7 @@ class TestMigrations:
     def test_scores_immutable(self, temp_db):
         """Scores can be stored and multiple snapshots coexist."""
         migrate(temp_db)
-        temp_db.execute(
-            "INSERT INTO registry (canonical_name) VALUES (?)", ("TestCo",)
-        )
+        temp_db.execute("INSERT INTO registry (canonical_name) VALUES (?)", ("TestCo",))
         reg_id = temp_db.execute("SELECT id FROM registry").fetchone()["id"]
 
         temp_db.execute(
@@ -180,13 +192,14 @@ class TestMigrations:
 
     def test_reconciliation_fast_path_current_schema(self, temp_db):
         """Current clean schema skips the full per-column PRAGMA loop."""
-        from kassandra.db import _reconcile_runtime_schema, SCHEMA_VERSION as current_ver
+        from kassandra.db import _reconcile_runtime_schema
 
         migrate(temp_db)
         # Patch _ensure_column to detect if it's ever called
         called = []
 
         import kassandra.db as db_mod
+
         original = db_mod._ensure_column
 
         def tracking_ensure(conn, table, column, definition):
@@ -196,9 +209,7 @@ class TestMigrations:
         db_mod._ensure_column = tracking_ensure
         try:
             _reconcile_runtime_schema(temp_db)
-            assert not called, (
-                f"Fast path should skip _ensure_column calls; got {called}"
-            )
+            assert not called, f"Fast path should skip _ensure_column calls; got {called}"
         finally:
             db_mod._ensure_column = original
 
@@ -213,14 +224,12 @@ class TestMigrations:
 
         # Should not raise; reconciliation must add it back
         _reconcile_runtime_schema(temp_db)
-        columns = {
-            row["name"] for row in temp_db.execute("PRAGMA table_info(source_runs)")
-        }
+        columns = {row["name"] for row in temp_db.execute("PRAGMA table_info(source_runs)")}
         assert "errors" in columns, "Reconciliation must restore dropped column"
 
     def test_reconciliation_detects_missing_scoring_runs_provenance_json(self, temp_db):
         """Dropped scoring_runs.provenance_json must be detected and fail fast path."""
-        from kassandra.db import _reconcile_runtime_schema, _SchemaIntegrityError
+        from kassandra.db import _reconcile_runtime_schema
 
         migrate(temp_db)
         # Drop the provenance_json column from scoring_runs (simulate malformed table)
@@ -244,9 +253,7 @@ class TestMigrations:
         # Reconciliation should detect the missing column and fall back to
         # full reconciliation, which recreates the table with all columns.
         _reconcile_runtime_schema(temp_db)
-        columns = {
-            row["name"] for row in temp_db.execute("PRAGMA table_info(scoring_runs)")
-        }
+        columns = {row["name"] for row in temp_db.execute("PRAGMA table_info(scoring_runs)")}
         assert "provenance_json" in columns, (
             "Reconciliation must restore dropped scoring_runs.provenance_json"
         )
@@ -265,10 +272,7 @@ class TestMigrations:
 
         # Verify index was recreated
         indexes = {
-            row[0]
-            for row in temp_db.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            )
+            row[0] for row in temp_db.execute("SELECT name FROM sqlite_master WHERE type='index'")
         }
         assert "idx_unconfirmed_dedup" in indexes, (
             "Reconciliation must recreate dropped idx_unconfirmed_dedup"
@@ -288,10 +292,7 @@ class TestMigrations:
         _reconcile_runtime_schema(temp_db)
 
         triggers = {
-            row[0]
-            for row in temp_db.execute(
-                "SELECT name FROM sqlite_master WHERE type='trigger'"
-            )
+            row[0] for row in temp_db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")
         }
         assert "trg_scores_validate_run_id_insert" in triggers, (
             "Reconciliation must recreate dropped insert trigger"
@@ -324,8 +325,6 @@ class TestMigrations:
 
         # Verify UNIQUE constraint exists
         pk_info = [
-            row[1]
-            for row in temp_db.execute("PRAGMA table_info(scoring_runs)")
-            if row[5] > 0
+            row[1] for row in temp_db.execute("PRAGMA table_info(scoring_runs)") if row[5] > 0
         ]
         assert pk_info, "scoring_runs must have a PRIMARY KEY after reconciliation"

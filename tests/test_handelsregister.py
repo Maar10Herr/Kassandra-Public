@@ -1,13 +1,7 @@
 """Tests for Handelsregister (German commercial register) source adapter."""
 
-import json
 import sqlite3
-from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-import pytest
-
-from kassandra.contracts import CollectionMetrics
+from unittest.mock import patch
 
 
 def _make_db() -> sqlite3.Connection:
@@ -66,9 +60,15 @@ def test_classify_insolvency_status():
     from kassandra.sources.handelsregister import HandelsregisterClient
 
     client = HandelsregisterClient()
-    results = [{"name": "Test GmbH", "status": "Insolvenzverfahren eröffnet",
-                 "register_num": "HRB 12345", "court": "Berlin HRB 12345",
-                 "state": "Berlin"}]
+    results = [
+        {
+            "name": "Test GmbH",
+            "status": "Insolvenzverfahren eröffnet",
+            "register_num": "HRB 12345",
+            "court": "Berlin HRB 12345",
+            "state": "Berlin",
+        }
+    ]
     events = client.classify_results(results)
     assert len(events) == 1
     assert events[0]["event_type"] == "insolvency"
@@ -80,9 +80,15 @@ def test_classify_geloscht_status():
     from kassandra.sources.handelsregister import HandelsregisterClient
 
     client = HandelsregisterClient()
-    results = [{"name": "Dead GmbH", "status": "gelöscht",
-                 "register_num": "HRB 99999", "court": "München HRB 99999",
-                 "state": "Bayern"}]
+    results = [
+        {
+            "name": "Dead GmbH",
+            "status": "gelöscht",
+            "register_num": "HRB 99999",
+            "court": "München HRB 99999",
+            "state": "Bayern",
+        }
+    ]
     events = client.classify_results(results)
     assert len(events) == 1
     assert events[0]["event_type"] == "insolvency"
@@ -93,9 +99,15 @@ def test_classify_routine_status_returns_no_events():
     from kassandra.sources.handelsregister import HandelsregisterClient
 
     client = HandelsregisterClient()
-    results = [{"name": "Alive AG", "status": "eingetragen",
-                 "register_num": "HRB 55555", "court": "Hamburg HRB 55555",
-                 "state": "Hamburg"}]
+    results = [
+        {
+            "name": "Alive AG",
+            "status": "eingetragen",
+            "register_num": "HRB 55555",
+            "court": "Hamburg HRB 55555",
+            "state": "Hamburg",
+        }
+    ]
     events = client.classify_results(results)
     assert events == []
 
@@ -104,9 +116,15 @@ def test_classify_keyword_fallback():
     from kassandra.sources.handelsregister import HandelsregisterClient
 
     client = HandelsregisterClient()
-    results = [{"name": "WeirdCo", "status": "irgendwas mit insolvenz drin",
-                 "register_num": "HRA 111", "court": "Köln HRA 111",
-                 "state": "NRW"}]
+    results = [
+        {
+            "name": "WeirdCo",
+            "status": "irgendwas mit insolvenz drin",
+            "register_num": "HRA 111",
+            "court": "Köln HRA 111",
+            "state": "NRW",
+        }
+    ]
     events = client.classify_results(results)
     assert len(events) == 1
     assert events[0]["event_type"] == "unconfirmed_adverse"
@@ -171,21 +189,30 @@ def test_collect_for_company_stores_evidence_and_events():
     db = _make_db()
     client = HandelsregisterClient()
 
-    with patch.object(client, "search", return_value=[
-        {"name": "Siemens AG", "court": "Berlin HRB 12345",
-         "register_num": "HRB 12345", "state": "Berlin",
-         "status": "Insolvenzverfahren eröffnet", "documents": "5"},
-    ]):
+    with patch.object(
+        client,
+        "search",
+        return_value=[
+            {
+                "name": "Siemens AG",
+                "court": "Berlin HRB 12345",
+                "register_num": "HRB 12345",
+                "state": "Berlin",
+                "status": "Insolvenzverfahren eröffnet",
+                "documents": "5",
+            },
+        ],
+    ):
         created = client.collect_for_company(
-            db=db, registry_id=1, company_name="Siemens AG",
+            db=db,
+            registry_id=1,
+            company_name="Siemens AG",
         )
 
     assert created == 1
     evidence_count = db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
     assert evidence_count == 1
-    event = db.execute(
-        "SELECT event_type, severity, confidence FROM events LIMIT 1"
-    ).fetchone()
+    event = db.execute("SELECT event_type, severity, confidence FROM events LIMIT 1").fetchone()
     assert event["event_type"] == "insolvency"
     assert event["severity"] == "critical"
     assert event["confidence"] == 0.85
@@ -198,13 +225,24 @@ def test_collect_for_company_metrics_insolvency():
     db = _make_db()
     client = HandelsregisterClient()
 
-    with patch.object(client, "search", return_value=[
-        {"name": "Siemens AG", "court": "Berlin HRB 12345",
-         "register_num": "HRB 12345", "state": "Berlin",
-         "status": "Insolvenzverfahren eröffnet", "documents": "5"},
-    ]):
+    with patch.object(
+        client,
+        "search",
+        return_value=[
+            {
+                "name": "Siemens AG",
+                "court": "Berlin HRB 12345",
+                "register_num": "HRB 12345",
+                "state": "Berlin",
+                "status": "Insolvenzverfahren eröffnet",
+                "documents": "5",
+            },
+        ],
+    ):
         m = client.collect_for_company_metrics(
-            db=db, registry_id=1, company_name="Siemens AG",
+            db=db,
+            registry_id=1,
+            company_name="Siemens AG",
         )
 
     assert m.discovered == 1
@@ -227,7 +265,9 @@ def test_collect_for_company_metrics_zero_results():
 
     with patch.object(client, "search", return_value=[]):
         m = client.collect_for_company_metrics(
-            db=db, registry_id=1, company_name="Nonexistent GmbH",
+            db=db,
+            registry_id=1,
+            company_name="Nonexistent GmbH",
         )
 
     assert m.discovered == 0
@@ -247,20 +287,31 @@ def test_collect_for_company_metrics_routine_status_no_event():
     db = _make_db()
     client = HandelsregisterClient()
 
-    with patch.object(client, "search", return_value=[
-        {"name": "Healthy GmbH", "court": "München HRB 55555",
-         "register_num": "HRB 55555", "state": "Bayern",
-         "status": "eingetragen", "documents": "0"},
-    ]):
+    with patch.object(
+        client,
+        "search",
+        return_value=[
+            {
+                "name": "Healthy GmbH",
+                "court": "München HRB 55555",
+                "register_num": "HRB 55555",
+                "state": "Bayern",
+                "status": "eingetragen",
+                "documents": "0",
+            },
+        ],
+    ):
         m = client.collect_for_company_metrics(
-            db=db, registry_id=2, company_name="Healthy GmbH",
+            db=db,
+            registry_id=2,
+            company_name="Healthy GmbH",
         )
 
     assert m.discovered == 1
     assert m.fetched == 1
     assert m.new_evidence == 1
     assert m.duplicates == 0
-    assert m.candidates == 0      # routine status → no classified event
+    assert m.candidates == 0  # routine status → no classified event
     assert m.events_created == 0
     m.assert_reconciled()
 
@@ -274,23 +325,40 @@ def test_collect_for_company_metrics_two_events():
 
     # Patch classify_results to return two events from one result
     two_events = [
-        {"name": "Test GmbH", "court": "Berlin HRB 88888",
-         "register_num": "HRB 88888", "state": "Berlin",
-         "status": "Insolvenzverfahren eröffnet", "documents": "1"},
+        {
+            "name": "Test GmbH",
+            "court": "Berlin HRB 88888",
+            "register_num": "HRB 88888",
+            "state": "Berlin",
+            "status": "Insolvenzverfahren eröffnet",
+            "documents": "1",
+        },
     ]
     with patch.object(client, "search", return_value=two_events):
-        with patch.object(client, "classify_results", return_value=[
-            {"event_type": "insolvency", "severity": "critical",
-             "confidence": 0.85,
-             "description": "Insolvency opened",
-             "source_detail": {}},
-            {"event_type": "restructuring", "severity": "high",
-             "confidence": 0.85,
-             "description": "Restructuring filed",
-             "source_detail": {}},
-        ]):
+        with patch.object(
+            client,
+            "classify_results",
+            return_value=[
+                {
+                    "event_type": "insolvency",
+                    "severity": "critical",
+                    "confidence": 0.85,
+                    "description": "Insolvency opened",
+                    "source_detail": {},
+                },
+                {
+                    "event_type": "restructuring",
+                    "severity": "high",
+                    "confidence": 0.85,
+                    "description": "Restructuring filed",
+                    "source_detail": {},
+                },
+            ],
+        ):
             m = client.collect_for_company_metrics(
-                db=db, registry_id=1, company_name="Test GmbH",
+                db=db,
+                registry_id=1,
+                company_name="Test GmbH",
             )
 
     assert m.discovered == 1
@@ -310,15 +378,22 @@ def test_collect_for_company_metrics_duplicate_on_second_run():
     client = HandelsregisterClient()
 
     search_results = [
-        {"name": "Siemens AG", "court": "Berlin HRB 12345",
-         "register_num": "HRB 12345", "state": "Berlin",
-         "status": "Insolvenzverfahren eröffnet", "documents": "5"},
+        {
+            "name": "Siemens AG",
+            "court": "Berlin HRB 12345",
+            "register_num": "HRB 12345",
+            "state": "Berlin",
+            "status": "Insolvenzverfahren eröffnet",
+            "documents": "5",
+        },
     ]
 
     # First run
     with patch.object(client, "search", return_value=search_results):
         m1 = client.collect_for_company_metrics(
-            db=db, registry_id=1, company_name="Siemens AG",
+            db=db,
+            registry_id=1,
+            company_name="Siemens AG",
         )
     assert m1.new_evidence == 1
     assert m1.duplicates == 0
@@ -329,7 +404,9 @@ def test_collect_for_company_metrics_duplicate_on_second_run():
     # Second run — same data
     with patch.object(client, "search", return_value=search_results):
         m2 = client.collect_for_company_metrics(
-            db=db, registry_id=1, company_name="Siemens AG",
+            db=db,
+            registry_id=1,
+            company_name="Siemens AG",
         )
     assert m2.new_evidence == 0
     assert m2.duplicates == 1
@@ -340,7 +417,9 @@ def test_collect_for_company_metrics_duplicate_on_second_run():
     # Legacy int API also returns correct count on second run
     with patch.object(client, "search", return_value=search_results):
         created = client.collect_for_company(
-            db=db, registry_id=1, company_name="Siemens AG",
+            db=db,
+            registry_id=1,
+            company_name="Siemens AG",
         )
     assert created == 0
 
@@ -354,29 +433,45 @@ def test_collect_for_company_metrics_multiple_companies_aggregation():
 
     # Siemens → one insolvency event
     siemens_results = [
-        {"name": "Siemens AG", "court": "Berlin HRB 12345",
-         "register_num": "HRB 12345", "state": "Berlin",
-         "status": "Insolvenzverfahren eröffnet", "documents": "5"},
+        {
+            "name": "Siemens AG",
+            "court": "Berlin HRB 12345",
+            "register_num": "HRB 12345",
+            "state": "Berlin",
+            "status": "Insolvenzverfahren eröffnet",
+            "documents": "5",
+        },
     ]
     # Healthy GmbH → routine, no event
     healthy_results = [
-        {"name": "Healthy GmbH", "court": "München HRB 55555",
-         "register_num": "HRB 55555", "state": "Bayern",
-         "status": "eingetragen", "documents": "0"},
+        {
+            "name": "Healthy GmbH",
+            "court": "München HRB 55555",
+            "register_num": "HRB 55555",
+            "state": "Bayern",
+            "status": "eingetragen",
+            "documents": "0",
+        },
     ]
 
     with patch.object(client, "search", side_effect=[siemens_results, healthy_results]):
         m1 = client.collect_for_company_metrics(
-            db=db, registry_id=1, company_name="Siemens AG",
+            db=db,
+            registry_id=1,
+            company_name="Siemens AG",
         )
         m2 = client.collect_for_company_metrics(
-            db=db, registry_id=2, company_name="Healthy GmbH",
+            db=db,
+            registry_id=2,
+            company_name="Healthy GmbH",
         )
 
     # Manual aggregation (simulating what _collect_handelsregister does)
-    from kassandra.collector import CollectionMetrics as CM
-    aggregated = CM(
-        run_id="test", source_name="handelsregister_de",
+    from kassandra.collector import CollectionMetrics
+
+    aggregated = CollectionMetrics(
+        run_id="test",
+        source_name="handelsregister_de",
         discovered=m1.discovered + m2.discovered,
         fetched=m1.fetched + m2.fetched,
         new_evidence=m1.new_evidence + m2.new_evidence,

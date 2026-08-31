@@ -17,18 +17,21 @@ Design:
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import feedparser
 import httpx
 
 from kassandra.contracts import CollectionMetrics, MatchResult
-from kassandra.evidence import store_evidence, store_event
-from kassandra.sources.entity_resolution import exact_legal_name_match, queue_unconfirmed_match, discovery_overlap
+from kassandra.evidence import store_event, store_evidence
+from kassandra.sources.entity_resolution import (
+    discovery_overlap,
+    exact_legal_name_match,
+    queue_unconfirmed_match,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +39,45 @@ BORME_RSS_FEED = "https://www.boe.es/rss/borme.php"
 
 # Spanish legal-form suffix tokens to strip before matching
 SPANISH_LEGAL_SUFFIX_TOKENS: set[str] = {
-    "sa", "sl", "sll", "slu", "sc", "sco", "sca", "aie", "uta", "sal",
-    "sdad", "sociedad", "limitada", "anónima", "anonima", "slne", "ai", "cb",
-    "de", "del", "la", "las", "los", "el", "en", "y", "e", "con",
-    "the", "and", "of", "ltd", "limited", "plc", "bv", "nv", "gmbh", "ag", "se",
+    "sa",
+    "sl",
+    "sll",
+    "slu",
+    "sc",
+    "sco",
+    "sca",
+    "aie",
+    "uta",
+    "sal",
+    "sdad",
+    "sociedad",
+    "limitada",
+    "anónima",
+    "anonima",
+    "slne",
+    "ai",
+    "cb",
+    "de",
+    "del",
+    "la",
+    "las",
+    "los",
+    "el",
+    "en",
+    "y",
+    "e",
+    "con",
+    "the",
+    "and",
+    "of",
+    "ltd",
+    "limited",
+    "plc",
+    "bv",
+    "nv",
+    "gmbh",
+    "ag",
+    "se",
 }
 
 
@@ -65,12 +103,9 @@ def _notice_matches_company(company_name: str, title: str, description: str = ""
 
     notice_tokens = set(_normalise_tokens(f"{title} {description}"))
     if len(company_tokens) == 1:
-        token = company_tokens[0]
         # Hyphenated brands: collapse and match collapsed form
         if "-" in company_name:
-            collapsed_company = "".join(
-                re.findall(r"[a-z0-9áéíóúüñ]+", company_name.lower())
-            )
+            collapsed_company = "".join(re.findall(r"[a-z0-9áéíóúüñ]+", company_name.lower()))
             collapsed_notice = "".join(
                 re.findall(r"[a-z0-9áéíóúüñ]+", f"{title} {description}".lower())
             )
@@ -79,9 +114,7 @@ def _notice_matches_company(company_name: str, title: str, description: str = ""
         # substring in collapsed notice, not just token-in-set.
         # Prevents false matches like TECH SA (->"techsa") matching
         # "SCHNEIDER ELECTRIC TECH S.L." (collapsed: "schneiderelectrictechsl").
-        collapsed_company = "".join(
-            re.findall(r"[a-z0-9áéíóúüñ]+", company_name.lower())
-        )
+        collapsed_company = "".join(re.findall(r"[a-z0-9áéíóúüñ]+", company_name.lower()))
         collapsed_notice = "".join(
             re.findall(r"[a-z0-9áéíóúüñ]+", f"{title} {description}".lower())
         )
@@ -106,22 +139,34 @@ def _classify_borme_notice(title: str, description: str) -> tuple[str | None, st
 
     # Check for "convocatoria de juntas" with disolución FIRST
     # (before general disolución match, because convocatoria alone is not insolvency)
-    if ("convocatoria" in text and "junta" in text and
-            any(kw in text for kw in ["disolución", "disolucion"])):
+    if (
+        "convocatoria" in text
+        and "junta" in text
+        and any(kw in text for kw in ["disolución", "disolucion"])
+    ):
         return "restructuring", "high"
 
     # Critical: insolvency-related keywords
-    if any(kw in text for kw in ["liquidación", "liquidacion",
-                                   "concurso",
-                                   "disolución", "disolucion",
-                                   "quiebra"]):
+    if any(
+        kw in text
+        for kw in ["liquidación", "liquidacion", "concurso", "disolución", "disolucion", "quiebra"]
+    ):
         return "insolvency", "critical"
 
     # Other restructuring-related keywords
-    if any(kw in text for kw in ["reducción de capital", "reduccion de capital",
-                                   "transformación", "transformacion",
-                                   "fusión", "fusion",
-                                   "escisión", "escision"]):
+    if any(
+        kw in text
+        for kw in [
+            "reducción de capital",
+            "reduccion de capital",
+            "transformación",
+            "transformacion",
+            "fusión",
+            "fusion",
+            "escisión",
+            "escision",
+        ]
+    ):
         return "restructuring", "medium"
 
     return None, None
@@ -146,11 +191,34 @@ def _extract_official_id(title: str, description: str = "") -> str | None:
 
 # Generic tokens that alone are never distinctive
 _GENERIC_TOKENS: set[str] = {
-    "tech", "services", "group", "holding", "holdings", "international",
-    "spain", "espana", "españa", "madrid", "barcelona", "europe",
-    "solutions", "systems", "global", "trading", "capital", "management",
-    "company", "corporation", "corp", "inc", "llc",
-    "electric", "finance", "industrial", "industries", "energy",
+    "tech",
+    "services",
+    "group",
+    "holding",
+    "holdings",
+    "international",
+    "spain",
+    "espana",
+    "españa",
+    "madrid",
+    "barcelona",
+    "europe",
+    "solutions",
+    "systems",
+    "global",
+    "trading",
+    "capital",
+    "management",
+    "company",
+    "corporation",
+    "corp",
+    "inc",
+    "llc",
+    "electric",
+    "finance",
+    "industrial",
+    "industries",
+    "energy",
 }
 
 
@@ -159,7 +227,8 @@ _GENERIC_TOKENS: set[str] = {
 # Companies whose name contains only these tokens after stripping legal suffixes
 # should never match BORME notices without official-ID corroboration.
 _BORME_KNOWN_AMBIGUOUS_TOKENS: set[str] = {
-    "hermes", "delphine",
+    "hermes",
+    "delphine",
 }
 
 
@@ -204,7 +273,6 @@ def _match_notice_to_registry(
         )
 
     jurisdiction = (row["jurisdiction"] or "").upper()
-    lei_val = (row["lei"] or "").upper()
     spanish_tax_id = row["spanish_tax_id"]  # may be None
 
     # Only match Spanish entities against BORME data
@@ -306,7 +374,7 @@ def _match_notice_to_registry(
     if matching == 0:
         return MatchResult(
             status="rejected",
-            reason=f"No distinctive token overlap",
+            reason="No distinctive token overlap",
             confidence=0.0,
         )
 
@@ -334,6 +402,8 @@ class BorMeClient:
     def __init__(self) -> None:
         self._client = httpx.Client(
             timeout=30,
+            trust_env=False,
+            follow_redirects=False,
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -360,13 +430,15 @@ class BorMeClient:
                 return entries
 
             for entry in feed.entries[:max_entries]:
-                entries.append({
-                    "title": entry.get("title", ""),
-                    "link": entry.get("link", ""),
-                    "description": entry.get("description", ""),
-                    "published": entry.get("published", ""),
-                    "id": entry.get("id", ""),
-                })
+                entries.append(
+                    {
+                        "title": entry.get("title", ""),
+                        "link": entry.get("link", ""),
+                        "description": entry.get("description", ""),
+                        "published": entry.get("published", ""),
+                        "id": entry.get("id", ""),
+                    }
+                )
 
             logger.info(f"Fetched {len(entries)} BORME notices from feed")
         except httpx.HTTPError as e:
@@ -382,8 +454,9 @@ class BorMeClient:
         for entry in entries:
             title = entry.get("title", "")
             description = entry.get("description", "")
-            if (_extract_official_id(title, description) or
-                    discovery_overlap(company_name, f"{title} {description}", SPANISH_LEGAL_SUFFIX_TOKENS)):
+            if _extract_official_id(title, description) or discovery_overlap(
+                company_name, f"{title} {description}", SPANISH_LEGAL_SUFFIX_TOKENS
+            ):
                 matches.append(entry)
         return matches
 
@@ -397,7 +470,7 @@ class BorMeClient:
         """Store notices and return reconciled evidence/event outcomes."""
         new_evidence = duplicates = candidates = unconfirmed = 0
         events_created = duplicate_events = 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         for notice in notices:
             match_result = _match_notice_to_registry(db, notice, company_name, registry_id)
@@ -409,10 +482,16 @@ class BorMeClient:
                 f"Published: {notice.get('published', '')}\nDescription: {notice.get('description', '')}"
             )
             ev_result = store_evidence(
-                db=db, content=content, source_url=notice["link"], retrieval_time=now,
-                publication_time=notice.get("published"), extraction_method="borme_es_feed",
-                parser_version="1.0.0", content_type="application/rss+xml",
-                excerpt=notice["title"][:500], source_reliability=1.0,
+                db=db,
+                content=content,
+                source_url=notice["link"],
+                retrieval_time=now,
+                publication_time=notice.get("published"),
+                extraction_method="borme_es_feed",
+                parser_version="1.0.0",
+                content_type="application/rss+xml",
+                excerpt=notice["title"][:500],
+                source_reliability=1.0,
             )
             evidence_id = ev_result.evidence_id
             if ev_result.is_new:
@@ -421,12 +500,19 @@ class BorMeClient:
                 duplicates += 1
 
             if match_result.is_confirmed:
-                event_type, severity = _classify_borme_notice(notice["title"], notice.get("description", ""))
+                event_type, severity = _classify_borme_notice(
+                    notice["title"], notice.get("description", "")
+                )
                 if event_type:
                     evt_result = store_event(
-                        db=db, evidence_id=evidence_id, registry_id=registry_id,
-                        event_type=event_type, severity=severity, confidence=0.9,
-                        description=notice["title"][:500], source_claims_directly=True,
+                        db=db,
+                        evidence_id=evidence_id,
+                        registry_id=registry_id,
+                        event_type=event_type,
+                        severity=severity,
+                        confidence=0.9,
+                        description=notice["title"][:500],
+                        source_claims_directly=True,
                     )
                     if evt_result.status == "inserted":
                         events_created += 1
@@ -435,10 +521,15 @@ class BorMeClient:
             elif match_result.is_unconfirmed_review_candidate:
                 # Count only newly queued work, not every rediscovery.
                 queued = queue_unconfirmed_match(
-                    db=db, source_name="borme_es", source_entity_name=notice.get("title", ""),
-                    candidate_registry_id=registry_id, candidate_registry_name=company_name,
-                    match_type=match_result.match_type, match_confidence=match_result.confidence,
-                    evidence_id=evidence_id, evidence_excerpt=notice.get("title", ""),
+                    db=db,
+                    source_name="borme_es",
+                    source_entity_name=notice.get("title", ""),
+                    candidate_registry_id=registry_id,
+                    candidate_registry_name=company_name,
+                    match_type=match_result.match_type,
+                    match_confidence=match_result.confidence,
+                    evidence_id=evidence_id,
+                    evidence_excerpt=notice.get("title", ""),
                     reason=match_result.reason,
                 )
                 unconfirmed += int(queued)
@@ -449,9 +540,15 @@ class BorMeClient:
                 )
 
         return CollectionMetrics(
-            run_id="", source_name="borme_es", discovered=len(notices),
-            fetched=new_evidence + duplicates, new_evidence=new_evidence, duplicates=duplicates,
-            candidates=candidates, unconfirmed=unconfirmed, events_created=events_created,
+            run_id="",
+            source_name="borme_es",
+            discovered=len(notices),
+            fetched=new_evidence + duplicates,
+            new_evidence=new_evidence,
+            duplicates=duplicates,
+            candidates=candidates,
+            unconfirmed=unconfirmed,
+            events_created=events_created,
             duplicate_events=duplicate_events,
         )
 
