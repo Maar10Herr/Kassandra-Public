@@ -1,8 +1,8 @@
 """Economic dependency discovery from annual reports and structured public data.
 
 Extracts customer, supplier, facility, commodity, and operational dependencies
-from annual report PDFs using transparent keyword/pattern matching.
-No LLM calls — auditable rules with matched text spans.
+from annual report PDFs using deterministic keyword and pattern matching with
+auditable matched text spans.
 
 Per kassandra_goals.md §3.5: evidence-backed, with quote spans, source URLs,
 confidence, concentration, and explicit uncertainty marking.

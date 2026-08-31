@@ -5,7 +5,7 @@ separate fast path: poll cheap event sources, rescore, and emit compact alerts o
 when newly observed adverse events cross the alert policy.
 
 Design principles:
-- no LLM calls at runtime;
+- use deterministic local classification;
 - use evidence/event deduplication already in the DB;
 - coordinate with the daily soak cycle through the shared cycle lock;
 - stay quiet when there is nothing new, so a scheduler can suppress delivery.
