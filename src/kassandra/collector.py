@@ -17,23 +17,20 @@ import json
 import logging
 import sqlite3
 import time
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
 
-from kassandra.config import get_config
 from kassandra.contracts import CollectionMetrics
-from kassandra.evidence import store_evidence, store_event
+from kassandra.evidence import store_event, store_evidence
 from kassandra.observability import (
     finish_run,
     log_source_event,
     start_run,
 )
+from kassandra.sources.bodacc import BodaccClient
+from kassandra.sources.borme import BorMeClient
 from kassandra.sources.companies_house import CompaniesHouseClient
 from kassandra.sources.gazette import GazetteClient
-from kassandra.sources.gleif import GleifClient
-from kassandra.sources.bodacc import BodaccClient
 from kassandra.sources.handelsregister import HandelsregisterClient
-from kassandra.sources.borme import BorMeClient
 from kassandra.sources.web_monitor import WebMonitor
 
 logger = logging.getLogger(__name__)
@@ -44,15 +41,20 @@ def _classify_collection_error(exc: Exception) -> str:
     text = f"{type(exc).__name__}: {exc}".lower()
     if isinstance(exc, TimeoutError) or "timed out" in text or "timeout" in text:
         return "timeout"
-    if isinstance(exc, PermissionError) or any(token in text for token in ("401", "403", "unauthorized", "forbidden", "auth")):
+    if isinstance(exc, PermissionError) or any(
+        token in text for token in ("401", "403", "unauthorized", "forbidden", "auth")
+    ):
         return "auth"
-    if isinstance(exc, (ValueError, json.JSONDecodeError)) or any(token in text for token in ("parse", "invalid json", "decode")):
+    if isinstance(exc, (ValueError, json.JSONDecodeError)) or any(
+        token in text for token in ("parse", "invalid json", "decode")
+    ):
         return "parse"
     if any(token in text for token in ("blocked", "captcha", "rate limit", "429")):
         return "block"
     if any(token in text for token in ("unavailable", "unreachable", "connection", "dns")):
         return "unavailable"
     return "unknown"
+
 
 EVENT_SEVERITY = {
     "insolvency": "critical",
@@ -86,7 +88,9 @@ EVENT_SEVERITY = {
 }
 
 
-def run_collection(db: sqlite3.Connection, sources: list[str] | None = None) -> dict[str, CollectionMetrics]:
+def run_collection(
+    db: sqlite3.Connection, sources: list[str] | None = None
+) -> dict[str, CollectionMetrics]:
     """Run active source adapters with full observability.
 
     Args:
@@ -98,11 +102,18 @@ def run_collection(db: sqlite3.Connection, sources: list[str] | None = None) -> 
     Returns dict of source_name → CollectionMetrics.
     """
     if sources is None:
-        sources = ["companies_house", "uk_gazette", "web_monitor", "handelsregister_de", "bodacc_fr", "borme_es"]
+        sources = [
+            "companies_house",
+            "uk_gazette",
+            "web_monitor",
+            "handelsregister_de",
+            "bodacc_fr",
+            "borme_es",
+        ]
     run_id = start_run(db, "collection")
     metrics: dict[str, CollectionMetrics] = {}
     latencies: dict[str, float] = {}
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     # 1. Register all active sources
     _register_sources(db)
@@ -116,21 +127,31 @@ def run_collection(db: sqlite3.Connection, sources: list[str] | None = None) -> 
             m.assert_reconciled()
             metrics[name] = m
             if m.new_evidence > 0:
-                log_source_event(db, name, "api",
-                                 _source_base_url(name),
-                                 "evidence_collected", {"count": m.new_evidence})
+                log_source_event(
+                    db,
+                    name,
+                    "api",
+                    _source_base_url(name),
+                    "evidence_collected",
+                    {"count": m.new_evidence},
+                )
             else:
-                log_source_event(db, name, "api",
-                                 _source_base_url(name), "success")
+                log_source_event(db, name, "api", _source_base_url(name), "success")
         except Exception as e:
             latencies[name] = time.monotonic() - t0
             error_type = _classify_collection_error(e)
             logger.error(f"{name} collection failed: {e}")
-            log_source_event(db, name, "api",
-                             _source_base_url(name),
-                             "failure", {"error": str(e), "error_type": error_type})
+            log_source_event(
+                db,
+                name,
+                "api",
+                _source_base_url(name),
+                "failure",
+                {"error": str(e), "error_type": error_type},
+            )
             metrics[name] = CollectionMetrics(
-                run_id=run_id, source_name=name,
+                run_id=run_id,
+                source_name=name,
                 errors=1,
                 api_errors=0 if error_type == "parse" else 1,
                 parse_failures=1 if error_type == "parse" else 0,
@@ -163,8 +184,7 @@ def run_collection(db: sqlite3.Connection, sources: list[str] | None = None) -> 
         _run_source("borme_es", _collect_borme)
 
     # 8. GLEIF is queried during graph build, not collection — but register source
-    log_source_event(db, "gleif", "api",
-                     "https://api.gleif.org/api/v1", "success")
+    log_source_event(db, "gleif", "api", "https://api.gleif.org/api/v1", "success")
 
     db.commit()
 
@@ -173,12 +193,17 @@ def run_collection(db: sqlite3.Connection, sources: list[str] | None = None) -> 
     logger.info(f"Collection complete: {total_new} new evidence items, {total_events} events")
 
     # Finish run with summary
-    finish_run(db, run_id, "collection", summary={
-        "results": {k: v.to_dict() for k, v in metrics.items()},
-        "total_new_evidence": total_new,
-        "total_events": total_events,
-        "completed_at": now,
-    })
+    finish_run(
+        db,
+        run_id,
+        "collection",
+        summary={
+            "results": {k: v.to_dict() for k, v in metrics.items()},
+            "total_new_evidence": total_new,
+            "total_events": total_events,
+            "completed_at": now,
+        },
+    )
 
     # Record per-source yield with reconciliation fields
     _record_source_yields(db, run_id, metrics, latencies)
@@ -233,12 +258,20 @@ def _collect_companies_house(db: sqlite3.Connection, run_id: str) -> CollectionM
     ch_client = CompaniesHouseClient()
     if not ch_client.available:
         logger.info("Companies House not available, skipping")
-        log_source_event(db, "companies_house", "api",
-                         "https://api.companieshouse.gov.uk",
-                         "failure", {"error": "not_available"})
+        log_source_event(
+            db,
+            "companies_house",
+            "api",
+            "https://api.companieshouse.gov.uk",
+            "failure",
+            {"error": "not_available"},
+        )
         return CollectionMetrics(
-            run_id=run_id, source_name="companies_house", errors=1,
-            api_errors=1, error_type="auth",
+            run_id=run_id,
+            source_name="companies_house",
+            errors=1,
+            api_errors=1,
+            error_type="auth",
             error_message="Companies House API key unavailable",
         )
 
@@ -259,12 +292,13 @@ def _collect_companies_house(db: sqlite3.Connection, run_id: str) -> CollectionM
     parse_failures = 0
     last_error_type: str | None = None
     last_error_message: str | None = None
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     for row in rows:
         try:
             filing_history = ch_client.get_filing_history(
-                row["companies_house_number"], items_per_page=10)
+                row["companies_house_number"], items_per_page=10
+            )
             if not filing_history or "items" not in filing_history:
                 if ch_client.last_error is not None:
                     errors += 1
@@ -280,13 +314,16 @@ def _collect_companies_house(db: sqlite3.Connection, run_id: str) -> CollectionM
                 discovered += 1
                 filing_json = json.dumps(item)
                 ev_result = store_evidence(
-                    db=db, content=filing_json,
+                    db=db,
+                    content=filing_json,
                     source_url=(
                         f"https://api.companieshouse.gov.uk/company/"
                         f"{row['companies_house_number']}/filing-history"
                     ),
-                    retrieval_time=now, publication_time=item.get("date"),
-                    extraction_method="companies_house_api", parser_version="1.0.0",
+                    retrieval_time=now,
+                    publication_time=item.get("date"),
+                    extraction_method="companies_house_api",
+                    parser_version="1.0.0",
                     content_type="application/json",
                     excerpt=item.get("description", ""),
                     source_reliability=1.0,
@@ -302,10 +339,15 @@ def _collect_companies_house(db: sqlite3.Connection, run_id: str) -> CollectionM
                 if event_type:
                     candidates += 1
                     evt_result = store_event(
-                        db=db, evidence_id=evidence_id, registry_id=row["id"],
-                        event_type=event_type, severity=severity,
-                        confidence=1.0, description=item.get("description", ""),
-                        source_claims_directly=True, raw_event_json=filing_json,
+                        db=db,
+                        evidence_id=evidence_id,
+                        registry_id=row["id"],
+                        event_type=event_type,
+                        severity=severity,
+                        confidence=1.0,
+                        description=item.get("description", ""),
+                        source_claims_directly=True,
+                        raw_event_json=filing_json,
                     )
                     if evt_result.status == "inserted":
                         events_created += 1
@@ -322,14 +364,20 @@ def _collect_companies_house(db: sqlite3.Connection, run_id: str) -> CollectionM
                 api_errors += 1
 
     return CollectionMetrics(
-        run_id=run_id, source_name="companies_house",
+        run_id=run_id,
+        source_name="companies_house",
         discovered=discovered,
         fetched=new_evidence + duplicates,
-        new_evidence=new_evidence, duplicates=duplicates,
+        new_evidence=new_evidence,
+        duplicates=duplicates,
         candidates=candidates,
-        events_created=events_created, duplicate_events=duplicate_events,
-        errors=errors, api_errors=api_errors, parse_failures=parse_failures,
-        error_type=last_error_type, error_message=last_error_message,
+        events_created=events_created,
+        duplicate_events=duplicate_events,
+        errors=errors,
+        api_errors=api_errors,
+        parse_failures=parse_failures,
+        error_type=last_error_type,
+        error_message=last_error_message,
     )
 
 
@@ -348,10 +396,13 @@ def _collect_gazette(db: sqlite3.Connection, run_id: str) -> CollectionMetrics:
         if gazette.last_error is not None:
             error_type = _classify_collection_error(gazette.last_error)
             return CollectionMetrics(
-                run_id=run_id, source_name="uk_gazette", errors=1,
+                run_id=run_id,
+                source_name="uk_gazette",
+                errors=1,
                 api_errors=0 if error_type == "parse" else 1,
                 parse_failures=1 if error_type == "parse" else 0,
-                error_type=error_type, error_message=str(gazette.last_error)[:500],
+                error_type=error_type,
+                error_message=str(gazette.last_error)[:500],
             )
         return CollectionMetrics(run_id=run_id, source_name="uk_gazette")
 
@@ -374,7 +425,10 @@ def _collect_gazette(db: sqlite3.Connection, run_id: str) -> CollectionMetrics:
 
     for row in rows:
         outcome = gazette.collect_for_company_from_notices(
-            db=db, registry_id=row["id"], company_name=row["canonical_name"], notices=notices,
+            db=db,
+            registry_id=row["id"],
+            company_name=row["canonical_name"],
+            notices=notices,
         )
         new_evidence += outcome.new_evidence
         duplicates += outcome.duplicates
@@ -384,12 +438,16 @@ def _collect_gazette(db: sqlite3.Connection, run_id: str) -> CollectionMetrics:
         unconfirmed += outcome.unconfirmed
 
     return CollectionMetrics(
-        run_id=run_id, source_name="uk_gazette",
+        run_id=run_id,
+        source_name="uk_gazette",
         discovered=max(discovered, new_evidence + duplicates),
         fetched=new_evidence + duplicates,
-        new_evidence=new_evidence, duplicates=duplicates,
-        candidates=candidates, unconfirmed=unconfirmed,
-        events_created=events_created, duplicate_events=duplicate_events,
+        new_evidence=new_evidence,
+        duplicates=duplicates,
+        candidates=candidates,
+        unconfirmed=unconfirmed,
+        events_created=events_created,
+        duplicate_events=duplicate_events,
         errors=0,
     )
 
@@ -422,7 +480,8 @@ def _collect_handelsregister(db: sqlite3.Connection, run_id: str) -> CollectionM
     for row in rows:
         try:
             outcome = hr_client.collect_for_company_metrics(
-                db=db, registry_id=row["id"],
+                db=db,
+                registry_id=row["id"],
                 company_name=row["canonical_name"],
                 run_id=run_id,
             )
@@ -437,17 +496,22 @@ def _collect_handelsregister(db: sqlite3.Connection, run_id: str) -> CollectionM
             errors += 1
 
     return CollectionMetrics(
-        run_id=run_id, source_name="handelsregister_de",
+        run_id=run_id,
+        source_name="handelsregister_de",
         discovered=discovered,
         fetched=new_evidence + duplicates,
-        new_evidence=new_evidence, duplicates=duplicates,
+        new_evidence=new_evidence,
+        duplicates=duplicates,
         candidates=candidates,
-        events_created=events_created, duplicate_events=duplicate_events,
+        events_created=events_created,
+        duplicate_events=duplicate_events,
         errors=errors,
     )
 
 
-def _collect_web_monitor(db: sqlite3.Connection, run_id: str, use_async: bool = True) -> CollectionMetrics:
+def _collect_web_monitor(
+    db: sqlite3.Connection, run_id: str, use_async: bool = True
+) -> CollectionMetrics:
     """Monitor company websites and feeds, using bounded parallel HTTP by default.
 
     Returns CollectionMetrics.
@@ -478,11 +542,9 @@ def _collect_web_monitor(db: sqlite3.Connection, run_id: str, use_async: bool = 
             )
             attempted_evidence += count
             if count > 0:
-                logger.info(
-                    f"  {row['canonical_name']}: {count} web evidence items")
+                logger.info(f"  {row['canonical_name']}: {count} web evidence items")
         except Exception as e:
-            logger.warning(
-                f"Web monitor failed for {row['canonical_name']}: {e}")
+            logger.warning(f"Web monitor failed for {row['canonical_name']}: {e}")
             errors += 1
 
     # The monitor reports successful store attempts; derive inserted evidence from
@@ -490,10 +552,15 @@ def _collect_web_monitor(db: sqlite3.Connection, run_id: str, use_async: bool = 
     new_evidence = db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] - evidence_before
     duplicates = attempted_evidence - new_evidence
     return CollectionMetrics(
-        run_id=run_id, source_name="web_monitor",
-        discovered=len(rows), fetched=attempted_evidence,
-        new_evidence=new_evidence, duplicates=duplicates,
-        candidates=0, events_created=0, duplicate_events=0,
+        run_id=run_id,
+        source_name="web_monitor",
+        discovered=len(rows),
+        fetched=attempted_evidence,
+        new_evidence=new_evidence,
+        duplicates=duplicates,
+        candidates=0,
+        events_created=0,
+        duplicate_events=0,
         errors=errors,
     )
 
@@ -504,6 +571,7 @@ def _collect_web_monitor_async(db: sqlite3.Connection, run_id: str) -> Collectio
     Returns CollectionMetrics.
     """
     import asyncio
+
     from kassandra.sources.async_web_monitor import AsyncWebMonitor
 
     rows = db.execute(
@@ -528,11 +596,15 @@ def _collect_web_monitor_async(db: sqlite3.Connection, run_id: str) -> Collectio
             logger.info(f"  {c['canonical_name'][:40]}: {cnt} web evidence items")
 
     return CollectionMetrics(
-        run_id=run_id, source_name="web_monitor",
+        run_id=run_id,
+        source_name="web_monitor",
         discovered=len(companies),
         fetched=attempted_evidence,
-        new_evidence=new_evidence, duplicates=duplicates,
-        candidates=0, events_created=0, duplicate_events=0,
+        new_evidence=new_evidence,
+        duplicates=duplicates,
+        candidates=0,
+        events_created=0,
+        duplicate_events=0,
         errors=0,
     )
 
@@ -567,12 +639,13 @@ def _collect_bodacc(db: sqlite3.Connection, run_id: str, days_back: int = 30) ->
     unconfirmed = 0
 
     for row in rows:
-        matches = bodacc.filter_notices_for_company(
-            row["canonical_name"], notices
-        )
+        matches = bodacc.filter_notices_for_company(row["canonical_name"], notices)
         if matches:
             outcome = bodacc.process_notices_for_company(
-                db=db, registry_id=row["id"], company_name=row["canonical_name"], notices=matches,
+                db=db,
+                registry_id=row["id"],
+                company_name=row["canonical_name"],
+                notices=matches,
             )
             new_evidence += outcome.new_evidence
             duplicates += outcome.duplicates
@@ -582,13 +655,17 @@ def _collect_bodacc(db: sqlite3.Connection, run_id: str, days_back: int = 30) ->
             duplicate_events += outcome.duplicate_events
 
     return CollectionMetrics(
-        run_id=run_id, source_name="bodacc_fr",
+        run_id=run_id,
+        source_name="bodacc_fr",
         # A notice can be evaluated against several registry candidates.
         discovered=max(len(notices), new_evidence + duplicates),
         fetched=new_evidence + duplicates,
-        new_evidence=new_evidence, duplicates=duplicates,
-        candidates=candidates, unconfirmed=unconfirmed,
-        events_created=events_created, duplicate_events=duplicate_events,
+        new_evidence=new_evidence,
+        duplicates=duplicates,
+        candidates=candidates,
+        unconfirmed=unconfirmed,
+        events_created=events_created,
+        duplicate_events=duplicate_events,
         errors=0,
     )
 
@@ -622,12 +699,13 @@ def _collect_borme(db: sqlite3.Connection, run_id: str) -> CollectionMetrics:
     unconfirmed = 0
 
     for row in rows:
-        matches = borme.filter_notices_for_company(
-            row["canonical_name"], entries
-        )
+        matches = borme.filter_notices_for_company(row["canonical_name"], entries)
         if matches:
             outcome = borme.process_notices_for_company(
-                db=db, registry_id=row["id"], company_name=row["canonical_name"], notices=matches,
+                db=db,
+                registry_id=row["id"],
+                company_name=row["canonical_name"],
+                notices=matches,
             )
             new_evidence += outcome.new_evidence
             duplicates += outcome.duplicates
@@ -637,12 +715,16 @@ def _collect_borme(db: sqlite3.Connection, run_id: str) -> CollectionMetrics:
             duplicate_events += outcome.duplicate_events
 
     return CollectionMetrics(
-        run_id=run_id, source_name="borme_es",
+        run_id=run_id,
+        source_name="borme_es",
         discovered=max(len(entries), new_evidence + duplicates),
         fetched=new_evidence + duplicates,
-        new_evidence=new_evidence, duplicates=duplicates,
-        candidates=candidates, unconfirmed=unconfirmed,
-        events_created=events_created, duplicate_events=duplicate_events,
+        new_evidence=new_evidence,
+        duplicates=duplicates,
+        candidates=candidates,
+        unconfirmed=unconfirmed,
+        events_created=events_created,
+        duplicate_events=duplicate_events,
         errors=0,
     )
 
@@ -652,24 +734,44 @@ def _classify_filing(filing: dict) -> tuple[str | None, str | None]:
     description = filing.get("description", "").lower()
     category = filing.get("category", "").lower()
 
-    if any(term in description for term in [
-        "insolvency", "winding-up", "liquidation", "administration",
-        "moratorium", "receiver", "voluntary arrangement",
-    ]):
+    if any(
+        term in description
+        for term in [
+            "insolvency",
+            "winding-up",
+            "liquidation",
+            "administration",
+            "moratorium",
+            "receiver",
+            "voluntary arrangement",
+        ]
+    ):
         return "insolvency", "critical"
 
-    if any(term in description for term in [
-        "auditor", "auditors", "going concern",
-        "qualified report", "resignation of auditor",
-    ]):
+    if any(
+        term in description
+        for term in [
+            "auditor",
+            "auditors",
+            "going concern",
+            "qualified report",
+            "resignation of auditor",
+        ]
+    ):
         if "resignation" in description or "removed" in description:
             return "auditor_departure", "medium"
         return "auditor_warning", "high"
 
-    if any(term in description for term in [
-        "capital reduction", "solvency statement", "statement of capital",
-        "resolution", "restructuring",
-    ]):
+    if any(
+        term in description
+        for term in [
+            "capital reduction",
+            "solvency statement",
+            "statement of capital",
+            "resolution",
+            "restructuring",
+        ]
+    ):
         return "restructuring", "high" if "reduction" in description else "medium"
 
     if "accounts" in category and "overdue" in description:
@@ -683,7 +785,9 @@ def _classify_filing(filing: dict) -> tuple[str | None, str | None]:
 
 
 def _record_source_yields(
-    db: sqlite3.Connection, run_id: str, metrics: dict[str, CollectionMetrics],
+    db: sqlite3.Connection,
+    run_id: str,
+    metrics: dict[str, CollectionMetrics],
     latencies: dict[str, float] | None = None,
 ) -> None:
     """Record per-source yield in source_runs with reconciliation fields.
@@ -693,7 +797,7 @@ def _record_source_yields(
     duplicate_documents, candidates_generated, unconfirmed_matches,
     events_created, duplicate_events, errors.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     latencies = latencies or {}
     source_run_columns = {row[1] for row in db.execute("PRAGMA table_info(source_runs)")}
     has_status = "status" in source_run_columns
@@ -703,20 +807,30 @@ def _record_source_yields(
         status_values = ", ?" if has_status else ""
         error_columns = ", error_detail_json" if has_error_detail else ""
         error_values = ", ?" if has_error_detail else ""
-        values = [run_id, source_name,
-                  m.discovered, m.fetched,
-                  m.new_evidence, m.duplicates,
-                  m.candidates, m.unconfirmed,
-                  m.events_created, m.duplicate_events,
-                  m.errors, m.api_errors, m.parse_failures,
-                  m.events_created,
-                  latencies.get(source_name)]
+        values = [
+            run_id,
+            source_name,
+            m.discovered,
+            m.fetched,
+            m.new_evidence,
+            m.duplicates,
+            m.candidates,
+            m.unconfirmed,
+            m.events_created,
+            m.duplicate_events,
+            m.errors,
+            m.api_errors,
+            m.parse_failures,
+            m.events_created,
+            latencies.get(source_name),
+        ]
         if has_status:
             values.append("failed" if m.errors else "success")
         if has_error_detail:
             values.append(
                 json.dumps({"type": m.error_type, "message": m.error_message})
-                if m.error_type else None
+                if m.error_type
+                else None
             )
         values.extend([now, now])
         db.execute(
@@ -738,16 +852,23 @@ def _record_source_yields(
         # review queue are not accepted events, and duplicate event insertions
         # are reported separately rather than inflated as new accepted events.
         from kassandra.classifier import record_classifier_run
-        record_classifier_run(db, run_id, source_name, None, {
-            "documents_discovered": m.discovered,
-            "documents_fetched": m.fetched,
-            "documents_with_text": m.fetched,
-            "documents_classified": m.fetched,
-            "candidate_pattern_hits": m.candidates,
-            "rejected_candidates": max(
-                m.candidates - m.unconfirmed - m.events_created - m.duplicate_events, 0
-            ),
-            "accepted_events": m.events_created,
-            "false_positive_checks": m.unconfirmed,
-        })
+
+        record_classifier_run(
+            db,
+            run_id,
+            source_name,
+            None,
+            {
+                "documents_discovered": m.discovered,
+                "documents_fetched": m.fetched,
+                "documents_with_text": m.fetched,
+                "documents_classified": m.fetched,
+                "candidate_pattern_hits": m.candidates,
+                "rejected_candidates": max(
+                    m.candidates - m.unconfirmed - m.events_created - m.duplicate_events, 0
+                ),
+                "accepted_events": m.events_created,
+                "false_positive_checks": m.unconfirmed,
+            },
+        )
     db.commit()

@@ -1,15 +1,13 @@
 """Tests for edge metric extraction from annual report text."""
 
-import pytest
 from kassandra.extract_edge_metrics import (
-    _extract_company_metrics,
-    _extract_criticality_indicators,
-    _determine_concentration,
-    _determine_operational_criticality,
     DEFAULT_CRITICALITY,
     RELATIONSHIP_TYPE_CRITICALITY_FLOOR,
+    _determine_concentration,
+    _determine_operational_criticality,
+    _extract_company_metrics,
+    _extract_criticality_indicators,
 )
-
 
 FIXTURE_ASML_TEXT = """
 Our company depends on Carl Zeiss SMT GmbH, our sole supplier of
@@ -47,15 +45,11 @@ class TestCompanyMetrics:
         assert metrics["has_sole_supplier"] is True
 
     def test_extract_single_source(self):
-        metrics = _extract_company_metrics(
-            "single-source for key components"
-        )
+        metrics = _extract_company_metrics("single-source for key components")
         assert metrics["has_single_source"] is True
 
     def test_extract_customer_concentration(self):
-        metrics = _extract_company_metrics(
-            "top 3 customers account for 65% of revenue"
-        )
+        metrics = _extract_company_metrics("top 3 customers account for 65% of revenue")
         assert metrics["max_customer_pct"] > 20  # 65/3 ≈ 21.7
         assert metrics["avg_customer_pct"] > 20
 
@@ -68,9 +62,7 @@ class TestCompanyMetrics:
         # break the regex (known limitation, real reports disclose this way)
 
     def test_no_matches(self):
-        metrics = _extract_company_metrics(
-            "Nothing relevant here. Just ESG goals and DEI targets."
-        )
+        metrics = _extract_company_metrics("Nothing relevant here. Just ESG goals and DEI targets.")
         assert metrics["has_sole_supplier"] is False
         assert metrics["has_single_source"] is False
         assert metrics["max_customer_pct"] == 0.0
@@ -164,9 +156,7 @@ class TestCriticalityIndicators:
         assert max(scores) >= 0.9
 
     def test_extract_material_to_business(self):
-        indicators = _extract_criticality_indicators(
-            "These customers are material to our business"
-        )
+        indicators = _extract_criticality_indicators("These customers are material to our business")
         scores = [s for s, _, _ in indicators]
         assert max(scores) >= 0.8
 
@@ -199,9 +189,7 @@ class TestCriticalityIndicators:
         assert max(scores) >= 0.9
 
     def test_extract_irreplaceable(self):
-        indicators = _extract_criticality_indicators(
-            "No single customer is irreplaceable"
-        )
+        indicators = _extract_criticality_indicators("No single customer is irreplaceable")
         scores = [s for s, _, _ in indicators]
         assert max(scores) >= 0.9
 
@@ -261,9 +249,7 @@ class TestDetermineOperationalCriticality:
         assert crit == RELATIONSHIP_TYPE_CRITICALITY_FLOOR["facility_at"]  # 0.7
 
     def test_commodity_floor_when_no_indicators(self):
-        indicators = _extract_criticality_indicators(
-            "We purchase standard office supplies."
-        )
+        indicators = _extract_criticality_indicators("We purchase standard office supplies.")
         crit = _determine_operational_criticality(
             "We purchase standard office supplies.",
             "commodity_input",
@@ -319,9 +305,7 @@ class TestDetermineOperationalCriticality:
 
     def test_relationship_type_filters_indicators(self):
         # "key customer" should only apply to customer_of edges
-        indicators = _extract_criticality_indicators(
-            "TSMC is a key customer and strategic partner"
-        )
+        indicators = _extract_criticality_indicators("TSMC is a key customer and strategic partner")
         crit_supplier = _determine_operational_criticality(
             "TSMC is a key customer and strategic partner",
             "supplier_to",
@@ -418,6 +402,7 @@ have immaterial interest rate risk.
 class TestFindEntityInText:
     def test_exact_match(self):
         from kassandra.extract_edge_metrics import _find_entity_in_text
+
         text = "We depend on Carl Zeiss SMT GmbH, our sole supplier."
         pos = _find_entity_in_text(text, "sole supplier")
         assert pos is not None
@@ -425,6 +410,7 @@ class TestFindEntityInText:
 
     def test_newline_normalized_match(self):
         from kassandra.extract_edge_metrics import _find_entity_in_text
+
         text = " ".join("We depend on\nCarl Zeiss SMT GmbH,\nour sole supplier.".split())
         target = "our sole supplier"
         pos = _find_entity_in_text(text, target)
@@ -432,6 +418,7 @@ class TestFindEntityInText:
 
     def test_signature_fallback(self):
         from kassandra.extract_edge_metrics import _find_entity_in_text
+
         # Exact match is always found
         text = "Carl Zeiss SMT GmbH supplies optical components"
         target = "Carl Zeiss SMT GmbH"
@@ -440,12 +427,14 @@ class TestFindEntityInText:
 
     def test_not_found(self):
         from kassandra.extract_edge_metrics import _find_entity_in_text
+
         text = "We manufacture semiconductor equipment."
         pos = _find_entity_in_text(text, "Nonexistent Corporation XYZ")
         assert pos is None
 
     def test_empty_inputs(self):
         from kassandra.extract_edge_metrics import _find_entity_in_text
+
         assert _find_entity_in_text("", "target") is None
         assert _find_entity_in_text("text", "") is None
         assert _find_entity_in_text("", "") is None
@@ -454,6 +443,7 @@ class TestFindEntityInText:
 class TestExtractMaterialityFromContext:
     def test_sole_supplier(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "Carl Zeiss is our sole supplier of optical systems"
         )
@@ -461,13 +451,13 @@ class TestExtractMaterialityFromContext:
 
     def test_material_to_business(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "Disruption would materially impact our business"
-        )
+
+        mat = _extract_materiality_from_context("Disruption would materially impact our business")
         assert mat == 0.8
 
     def test_percentage_of_revenue(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "Our largest customer represents 22% of total revenue"
         )
@@ -475,13 +465,13 @@ class TestExtractMaterialityFromContext:
 
     def test_core_to_operations(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "These partnerships are core to our operations"
-        )
+
+        mat = _extract_materiality_from_context("These partnerships are core to our operations")
         assert mat == 0.9
 
     def test_essential_to_business(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "Our Veldhoven facility is essential to our business"
         )
@@ -489,34 +479,31 @@ class TestExtractMaterialityFromContext:
 
     def test_mission_critical(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "The cleanroom is mission-critical for production"
-        )
+
+        mat = _extract_materiality_from_context("The cleanroom is mission-critical for production")
         assert mat == 0.9
 
     def test_critical_to_operations(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "This supplier is critical to our operations"
-        )
+
+        mat = _extract_materiality_from_context("This supplier is critical to our operations")
         assert mat == 0.85
 
     def test_significant_subsidiary(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "XYZ GmbH is a significant subsidiary of the Group"
-        )
+
+        mat = _extract_materiality_from_context("XYZ GmbH is a significant subsidiary of the Group")
         assert mat == 0.7
 
     def test_key_supplier(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "Acme Corp is a key supplier of raw materials"
-        )
+
+        mat = _extract_materiality_from_context("Acme Corp is a key supplier of raw materials")
         assert mat == 0.7
 
     def test_key_customer(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "TSMC is a key customer accounting for significant revenue"
         )
@@ -524,20 +511,19 @@ class TestExtractMaterialityFromContext:
 
     def test_strategic_partner(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "Zeiss is our strategic partner for lithography"
-        )
+
+        mat = _extract_materiality_from_context("Zeiss is our strategic partner for lithography")
         assert mat == 0.5
 
     def test_dependent_on(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "We are heavily dependent on this supplier"
-        )
+
+        mat = _extract_materiality_from_context("We are heavily dependent on this supplier")
         assert mat == 0.75
 
     def test_no_viable_alternative(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "We have identified no viable alternative suppliers"
         )
@@ -545,13 +531,13 @@ class TestExtractMaterialityFromContext:
 
     def test_irreplaceable(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "No single customer is irreplaceable"
-        )
+
+        mat = _extract_materiality_from_context("No single customer is irreplaceable")
         assert mat == 0.95
 
     def test_not_material_dependency(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "This supplier relationship is not material to our operations"
         )
@@ -559,14 +545,14 @@ class TestExtractMaterialityFromContext:
 
     def test_immaterial_dependency(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
-        mat = _extract_materiality_from_context(
-            "This commodity exposure is immaterial"
-        )
+
+        mat = _extract_materiality_from_context("This commodity exposure is immaterial")
         assert mat == 0.05
 
     def test_not_material_accounting_skipped(self):
         """'not material' in accounting boilerplate should NOT produce 0.05."""
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "The pension liability is not material to the financial statements"
         )
@@ -575,6 +561,7 @@ class TestExtractMaterialityFromContext:
     def test_immaterial_accounting_skipped(self):
         """'immaterial' in accounting boilerplate should NOT produce 0.05."""
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "Short-term investments have immaterial interest rate risk"
         )
@@ -582,6 +569,7 @@ class TestExtractMaterialityFromContext:
 
     def test_highest_score_wins(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "Zeiss is a strategic partner and our sole supplier of optics"
         )
@@ -590,6 +578,7 @@ class TestExtractMaterialityFromContext:
 
     def test_no_matches(self):
         from kassandra.extract_edge_metrics import _extract_materiality_from_context
+
         mat = _extract_materiality_from_context(
             "The company continues its DEI initiatives and ESG reporting."
         )
@@ -599,36 +588,30 @@ class TestExtractMaterialityFromContext:
 class TestIsAccountingBoilerplate:
     def test_financial_statement(self):
         from kassandra.extract_edge_metrics import _is_accounting_boilerplate
-        assert _is_accounting_boilerplate(
-            "not material to the financial statements"
-        ) is True
+
+        assert _is_accounting_boilerplate("not material to the financial statements") is True
 
     def test_pension(self):
         from kassandra.extract_edge_metrics import _is_accounting_boilerplate
-        assert _is_accounting_boilerplate(
-            "pension obligation is not material"
-        ) is True
+
+        assert _is_accounting_boilerplate("pension obligation is not material") is True
 
     def test_interest_rate(self):
         from kassandra.extract_edge_metrics import _is_accounting_boilerplate
-        assert _is_accounting_boilerplate(
-            "immaterial interest rate risk"
-        ) is True
+
+        assert _is_accounting_boilerplate("immaterial interest rate risk") is True
 
     def test_fair_value(self):
         from kassandra.extract_edge_metrics import _is_accounting_boilerplate
-        assert _is_accounting_boilerplate(
-            "carrying amount is immaterial"
-        ) is True
+
+        assert _is_accounting_boilerplate("carrying amount is immaterial") is True
 
     def test_dependency_not_boilerplate(self):
         from kassandra.extract_edge_metrics import _is_accounting_boilerplate
-        assert _is_accounting_boilerplate(
-            "this supplier is not material to our business"
-        ) is False
+
+        assert _is_accounting_boilerplate("this supplier is not material to our business") is False
 
     def test_operations_not_boilerplate(self):
         from kassandra.extract_edge_metrics import _is_accounting_boilerplate
-        assert _is_accounting_boilerplate(
-            "this dependency is not material to operations"
-        ) is False
+
+        assert _is_accounting_boilerplate("this dependency is not material to operations") is False

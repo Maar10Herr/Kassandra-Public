@@ -9,10 +9,8 @@ replaceability scores on a 0.0-1.0 scale.
 import logging
 import re
 import sqlite3
-from pathlib import Path
 from typing import Any
 
-from kassandra.config import get_config
 from kassandra.evidence import get_evidence_path
 
 logger = logging.getLogger(__name__)
@@ -347,12 +345,13 @@ def _is_accounting_boilerplate(context: str) -> bool:
     """Check if a matched text is accounting boilerplate (not dependency-related)."""
     return bool(ACCOUNTING_BOILERPLATE_PATTERN.search(context))
 
+
 # Criticality floor for different relationship types (fallback when no text indicators)
 RELATIONSHIP_TYPE_CRITICALITY_FLOOR: dict[str, float] = {
-    "facility_at": 0.7,         # physical facilities are inherently critical
-    "commodity_input": 0.6,     # raw materials tend to be operationally important
-    "supplier_to": 0.5,         # suppliers are generally important
-    "customer_of": 0.4,         # customers are important but presumes some diversification
+    "facility_at": 0.7,  # physical facilities are inherently critical
+    "commodity_input": 0.6,  # raw materials tend to be operationally important
+    "supplier_to": 0.5,  # suppliers are generally important
+    "customer_of": 0.4,  # customers are important but presumes some diversification
     "operational_dependency": 0.6,  # explicit operational dependencies are important
 }
 
@@ -411,15 +410,11 @@ def _extract_concentration_pct(
                             if "respectively" in matched_text.lower():
                                 # "N customers represented respectively X%, Y%, Z%"
                                 # The captured X is the max individual concentration
-                                results.append(
-                                    (pct, confidence, matched_text[:200])
-                                )
+                                results.append((pct, confidence, matched_text[:200]))
                             else:
                                 # "top N customers account for X%" — X is total
                                 avg_pct = pct / n_val
-                                results.append(
-                                    (avg_pct, confidence, matched_text[:200])
-                                )
+                                results.append((avg_pct, confidence, matched_text[:200]))
                             continue
                     except (ValueError, TypeError):
                         pass
@@ -495,16 +490,37 @@ def _determine_operational_criticality(
     target_words: set[str] = set()
     if target_name:
         # Extract significant words (3+ chars, not common words)
-        common = {"the", "our", "and", "for", "are", "not", "its", "has", "that",
-                  "this", "with", "from", "have", "been", "were", "they", "will",
-                  "also", "which", "their", "other", "such", "these", "those"}
+        common = {
+            "the",
+            "our",
+            "and",
+            "for",
+            "are",
+            "not",
+            "its",
+            "has",
+            "that",
+            "this",
+            "with",
+            "from",
+            "have",
+            "been",
+            "were",
+            "they",
+            "will",
+            "also",
+            "which",
+            "their",
+            "other",
+            "such",
+            "these",
+            "those",
+        }
         for word in re.findall(r"\b\w{3,}\b", target_name.lower()):
             if word not in common:
                 target_words.add(word)
 
     best_score = 0.0
-    best_is_nearby = False
-
     for score, matched_text, rel_types in criticality_indicators:
         # Check if this indicator applies to the edge's relationship type
         if rel_types is not None and edge_type not in rel_types:
@@ -530,7 +546,6 @@ def _determine_operational_criticality(
 
         if effective_score > best_score:
             best_score = effective_score
-            best_is_nearby = nearby
 
     # If no text indicators matched, use relationship type floor
     if best_score == 0.0:
@@ -717,8 +732,6 @@ def extract_edge_metrics(db: sqlite3.Connection, dry_run: bool = False) -> dict[
     Returns:
         Dict with counts: {'updated': N, 'skipped': N, 'no_text': N, 'total': N}
     """
-    config = get_config()
-
     # Get all annual_report edges with NULL concentration
     edges = db.execute(
         """SELECT e.id, e.source_registry_id, e.target_registry_id,
@@ -832,14 +845,16 @@ def show_edge_metrics(db: sqlite3.Connection) -> list[dict[str, Any]]:
 
     results = []
     for row in rows:
-        results.append({
-            "relationship_type": row["relationship_type"],
-            "total": row["total"],
-            "has_concentration": row["has_conc"],
-            "has_replaceability": row["has_rep"],
-            "avg_concentration": row["avg_conc"],
-            "avg_replaceability": row["avg_rep"],
-        })
+        results.append(
+            {
+                "relationship_type": row["relationship_type"],
+                "total": row["total"],
+                "has_concentration": row["has_conc"],
+                "has_replaceability": row["has_rep"],
+                "avg_concentration": row["avg_conc"],
+                "avg_replaceability": row["avg_rep"],
+            }
+        )
     return results
 
 
@@ -878,9 +893,7 @@ def extract_operational_criticality(
     ).fetchall()
 
     if not edges:
-        logger.info(
-            "No annual_report edges with NULL operational_criticality found"
-        )
+        logger.info("No annual_report edges with NULL operational_criticality found")
         return {"updated": 0, "skipped": 0, "no_text": 0, "total": 0}
 
     # Group edges by evidence_id for efficient text reading
@@ -935,8 +948,7 @@ def extract_operational_criticality(
 
             if dry_run:
                 logger.info(
-                    f"[DRY RUN] Edge {edge['id']}: "
-                    f"type={edge_type} criticality={criticality:.2f}"
+                    f"[DRY RUN] Edge {edge['id']}: type={edge_type} criticality={criticality:.2f}"
                 )
                 stats["updated"] += 1
                 continue
@@ -950,8 +962,7 @@ def extract_operational_criticality(
             )
             stats["updated"] += 1
             logger.debug(
-                f"Updated edge {edge['id']}: "
-                f"type={edge_type} criticality={criticality:.2f}"
+                f"Updated edge {edge['id']}: type={edge_type} criticality={criticality:.2f}"
             )
 
     if not dry_run and stats["updated"] > 0:
@@ -984,14 +995,16 @@ def show_operational_criticality(
 
     results = []
     for row in rows:
-        results.append({
-            "relationship_type": row["relationship_type"],
-            "total": row["total"],
-            "has_criticality": row["has_crit"],
-            "avg_criticality": row["avg_crit"],
-            "min_criticality": row["min_crit"],
-            "max_criticality": row["max_crit"],
-        })
+        results.append(
+            {
+                "relationship_type": row["relationship_type"],
+                "total": row["total"],
+                "has_criticality": row["has_crit"],
+                "avg_criticality": row["avg_crit"],
+                "min_criticality": row["min_crit"],
+                "max_criticality": row["max_crit"],
+            }
+        )
     return results
 
 
@@ -1053,8 +1066,6 @@ def _extract_materiality_from_context(
 
     for idx, (pattern, base_score, exclusion) in enumerate(MATERIALITY_PATTERNS):
         for match in re.finditer(pattern, context, re.IGNORECASE):
-            match_text = match.group(0)
-
             # Check exclusion filter (for accounting boilerplate)
             if exclusion is not None:
                 excl_match = re.search(exclusion, context, re.IGNORECASE)
@@ -1076,9 +1087,7 @@ def _extract_materiality_from_context(
                         continue
             else:
                 # Fixed score pattern
-                if best_score is None or (
-                    base_score > best_score and idx <= best_priority
-                ):
+                if best_score is None or (base_score > best_score and idx <= best_priority):
                     # For "not material"/"immaterial" patterns, extra filtering
                     if base_score == 0.05:
                         if _is_accounting_boilerplate(context):
@@ -1099,9 +1108,7 @@ def _should_skip_accounting_not_material(context: str) -> bool:
     return _is_accounting_boilerplate(context)
 
 
-def extract_economic_materiality(
-    db: sqlite3.Connection, dry_run: bool = False
-) -> dict[str, int]:
+def extract_economic_materiality(db: sqlite3.Connection, dry_run: bool = False) -> dict[str, int]:
     """Extract economic materiality from annual report evidence and update edges.
 
     For each annual_report edge with NULL economic_materiality, reads the
@@ -1137,9 +1144,7 @@ def extract_economic_materiality(
     ).fetchall()
 
     if not edges:
-        logger.info(
-            "No annual_report edges with NULL economic_materiality found"
-        )
+        logger.info("No annual_report edges with NULL economic_materiality found")
         return {"updated": 0, "skipped": 0, "no_text": 0, "total": 0}
 
     # Group edges by evidence_id for efficient text reading
@@ -1248,13 +1253,15 @@ def show_economic_materiality(
 
     results = []
     for row in rows:
-        results.append({
-            "relationship_type": row["relationship_type"],
-            "total": row["total"],
-            "has_materiality": row["has_mat"],
-            "avg_materiality": row["avg_mat"],
-            "min_materiality": row["min_mat"],
-            "max_materiality": row["max_mat"],
-            "cleared_unknown_reason": row["cleared"],
-        })
+        results.append(
+            {
+                "relationship_type": row["relationship_type"],
+                "total": row["total"],
+                "has_materiality": row["has_mat"],
+                "avg_materiality": row["avg_mat"],
+                "min_materiality": row["min_mat"],
+                "max_materiality": row["max_mat"],
+                "cleared_unknown_reason": row["cleared"],
+            }
+        )
     return results

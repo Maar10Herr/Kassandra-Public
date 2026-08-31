@@ -18,10 +18,11 @@ import logging
 import signal
 import sqlite3
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from kassandra.collector import run_collection
 from kassandra.db import get_db, migrate
@@ -54,7 +55,7 @@ def load_daemon_state(path: Path = DAEMON_STATE_PATH) -> dict[str, Any]:
         else:
             state.pop("alerts_sent", None)
         return state
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return {
         "started_at": now,
         "last_cycle_at": None,
@@ -162,7 +163,9 @@ def _row_to_alert_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def format_alerts(alerts: Iterable[dict[str, Any]], cycle_summary: dict[str, Any] | None = None) -> str:
+def format_alerts(
+    alerts: Iterable[dict[str, Any]], cycle_summary: dict[str, Any] | None = None
+) -> str:
     """Format alerts as a transport-neutral Markdown message."""
     alerts = list(alerts)
     if not alerts:
@@ -177,16 +180,20 @@ def format_alerts(alerts: Iterable[dict[str, Any]], cycle_summary: dict[str, Any
         desc = _shorten(alert.get("description"), 220)
         pattern = alert.get("pattern_id") or "n/a"
         pub_time = alert.get("publication_time") or alert.get("extracted_at") or "?"
-        lines.extend([
-            f"### {alert['company']} — {alert['event_type']} ({alert['severity']})",
-            f"- Confidence: {float(alert.get('confidence') or 0):.2f} | Pattern: `{pattern}` | Event ID: `{alert['event_id']}`",
-            f"- Date: {str(pub_time)[:10]} | Source: {alert.get('source') or 'unknown'} | Evidence: `{alert.get('evidence_id')}`",
-        ])
+        lines.extend(
+            [
+                f"### {alert['company']} — {alert['event_type']} ({alert['severity']})",
+                f"- Confidence: {float(alert.get('confidence') or 0):.2f} | Pattern: `{pattern}` | Event ID: `{alert['event_id']}`",
+                f"- Date: {str(pub_time)[:10]} | Source: {alert.get('source') or 'unknown'} | Evidence: `{alert.get('evidence_id')}`",
+            ]
+        )
         if desc:
             lines.append(f"- Why: “{desc}”")
         if alert.get("source_url"):
             lines.append(f"- URL: {alert['source_url']}")
-        lines.append("- Action: open evidence, verify entity match/materiality, then decide whether to escalate to the daily watchlist note.")
+        lines.append(
+            "- Action: open evidence, verify entity match/materiality, then decide whether to escalate to the daily watchlist note."
+        )
         lines.append("")
 
     if len(alerts) > 20:
@@ -194,10 +201,12 @@ def format_alerts(alerts: Iterable[dict[str, Any]], cycle_summary: dict[str, Any
         lines.append("")
 
     if cycle_summary:
-        lines.extend([
-            "---",
-            f"*Fast cycle: sources={cycle_summary.get('sources')} | new evidence={cycle_summary.get('new_evidence')} | scored={cycle_summary.get('scores_computed')}*",
-        ])
+        lines.extend(
+            [
+                "---",
+                f"*Fast cycle: sources={cycle_summary.get('sources')} | new evidence={cycle_summary.get('new_evidence')} | scored={cycle_summary.get('scores_computed')}*",
+            ]
+        )
     return "\n".join(lines).strip()
 
 
@@ -210,7 +219,7 @@ def run_alert_cycle(
     """Run one fast polling cycle and return alert payload + operational stats."""
     sources = sources or DEFAULT_FAST_SOURCES
     state = load_daemon_state(state_path)
-    cycle_started_at = datetime.now(timezone.utc).isoformat()
+    cycle_started_at = datetime.now(UTC).isoformat()
 
     if not _acquire_cycle_lock():
         return {
@@ -260,7 +269,7 @@ def run_alert_cycle(
         state["last_failure"] = None
         if alerts:
             state["alerts_generated"] = int(state.get("alerts_generated", 0)) + len(alerts)
-            state["last_alerted_at"] = datetime.now(timezone.utc).isoformat()
+            state["last_alerted_at"] = datetime.now(UTC).isoformat()
         save_daemon_state(state, state_path)
 
         cycle_summary = {

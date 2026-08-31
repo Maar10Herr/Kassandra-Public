@@ -1,11 +1,9 @@
 """Tests for BODACC (French commercial announcements) source adapter."""
 
-import json
 import sqlite3
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
 
 def _make_db() -> sqlite3.Connection:
@@ -76,6 +74,7 @@ def _make_db() -> sqlite3.Connection:
 
 # ── Sample BODACC API responses ──────────────────────────────────────────
 
+
 def _make_bodacc_notice(
     commercant: str = "LVMH MOET HENNESSY LOUIS VUITTON",
     famille: str = "Procédures collectives",
@@ -118,6 +117,7 @@ MOCK_BODACC_RESPONSE = {
 
 # ── Matching tests ───────────────────────────────────────────────────────
 
+
 def test_notice_matches_company_basic():
     from kassandra.sources.bodacc import _notice_matches_company
 
@@ -139,20 +139,14 @@ def test_notice_matches_company_conservative():
 def test_notice_matches_hyphenated():
     from kassandra.sources.bodacc import _notice_matches_company
 
-    assert _notice_matches_company(
-        "SAINT-GOBAIN", "SAINT GOBAIN DISTRIBUTION BÂTIMENT"
-    )
+    assert _notice_matches_company("SAINT-GOBAIN", "SAINT GOBAIN DISTRIBUTION BÂTIMENT")
 
 
 def test_notice_no_match_different_company():
     from kassandra.sources.bodacc import _notice_matches_company
 
-    assert not _notice_matches_company(
-        "LVMH", "SOCIETE GENERALE SA"
-    )
-    assert not _notice_matches_company(
-        "TotalEnergies", "RENAULT SAS"
-    )
+    assert not _notice_matches_company("LVMH", "SOCIETE GENERALE SA")
+    assert not _notice_matches_company("TotalEnergies", "RENAULT SAS")
 
 
 def test_notice_matches_subset_tokens():
@@ -162,12 +156,11 @@ def test_notice_matches_subset_tokens():
     # "Moet" is distinctive and in the notice
     assert _notice_matches_company("Moet", "LVMH MOET HENNESSY LOUIS VUITTON")
     # "Moet Chandon" requires BOTH tokens
-    assert _notice_matches_company(
-        "Moet Chandon", "LVMH MOET HENNESSY CHANDON"
-    )
+    assert _notice_matches_company("Moet Chandon", "LVMH MOET HENNESSY CHANDON")
 
 
 # ── Classification tests ─────────────────────────────────────────────────
+
 
 def test_classify_procedures_collectives():
     from kassandra.sources.bodacc import _classify_annonce
@@ -194,6 +187,7 @@ def test_classify_unknown_family():
 
 
 # ── Client integration tests ─────────────────────────────────────────────
+
 
 def test_filter_notices_for_company():
     from kassandra.sources.bodacc import BodaccClient
@@ -227,12 +221,15 @@ def test_process_notices_stores_evidence_and_events():
     ]
 
     collected = client.process_notices_for_company(
-        db=db, registry_id=1, company_name="LVMH", notices=notices,
+        db=db,
+        registry_id=1,
+        company_name="LVMH",
+        notices=notices,
     )
 
     assert collected.new_evidence == 1
     assert collected.events_created == 0  # ambiguous → queued, not an event
-    assert collected.unconfirmed >= 1     # routed to unconfirmed_match_queue
+    assert collected.unconfirmed >= 1  # routed to unconfirmed_match_queue
 
     # Verify evidence stored
     evidence_count = db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
@@ -249,9 +246,7 @@ def test_process_notices_stores_evidence_and_events():
     assert event_count == 0, "ambiguous match must not create an event"
 
     # Verify queue entry
-    queue_row = db.execute(
-        "SELECT * FROM unconfirmed_match_queue LIMIT 1"
-    ).fetchone()
+    queue_row = db.execute("SELECT * FROM unconfirmed_match_queue LIMIT 1").fetchone()
     assert queue_row is not None
     assert queue_row["source_name"] == "bodacc_fr"
     assert queue_row["status"] == "pending"
@@ -271,22 +266,23 @@ def test_process_notices_radiations_event():
     ]
 
     collected = client.process_notices_for_company(
-        db=db, registry_id=2, company_name="TotalEnergies", notices=notices,
+        db=db,
+        registry_id=2,
+        company_name="TotalEnergies",
+        notices=notices,
     )
 
     assert collected.new_evidence == 1
     assert collected.events_created == 1
 
-    event = db.execute(
-        "SELECT event_type, severity FROM events LIMIT 1"
-    ).fetchone()
+    event = db.execute("SELECT event_type, severity FROM events LIMIT 1").fetchone()
     assert event["event_type"] == "restructuring"
     assert event["severity"] == "high"
 
 
 def test_fetch_notices_mocked():
     """fetch_notices makes HTTP calls and parses JSON response."""
-    from kassandra.sources.bodacc import BodaccClient, BODACC_API_BASE
+    from kassandra.sources.bodacc import BODACC_API_BASE, BodaccClient
 
     client = BodaccClient()
 
@@ -322,6 +318,7 @@ def test_fetch_notices_no_family_fetches_all_monitored():
         notices = client.fetch_notices(days_back=7, family=None)
 
     # Two families × one call each
+    assert notices == []
     assert mock_get.call_count == 2
 
 
@@ -344,12 +341,15 @@ def test_collect_for_company_integration():
 
     with patch.object(client, "fetch_notices", return_value=MOCK_BODACC_RESPONSE["results"]):
         collected = client.collect_for_company(
-            db=db, registry_id=1, company_name="LVMH", days_back=30,
+            db=db,
+            registry_id=1,
+            company_name="LVMH",
+            days_back=30,
         )
 
     assert collected.new_evidence >= 1
     assert collected.events_created == 0  # ambiguous → queued, not an event
-    assert collected.unconfirmed >= 1     # routed to unconfirmed_match_queue
+    assert collected.unconfirmed >= 1  # routed to unconfirmed_match_queue
 
     # Verify evidence stored
     evidence_count = db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
@@ -360,15 +360,14 @@ def test_collect_for_company_integration():
     assert event_count == 0, "ambiguous match must not create an event"
 
     # Verify queue entry
-    queue_row = db.execute(
-        "SELECT * FROM unconfirmed_match_queue LIMIT 1"
-    ).fetchone()
+    queue_row = db.execute("SELECT * FROM unconfirmed_match_queue LIMIT 1").fetchone()
     assert queue_row is not None
     assert queue_row["source_name"] == "bodacc_fr"
     assert queue_row["status"] == "pending"
 
 
 # ── Identifier-first policy regression tests ───────────────────────────
+
 
 def _make_db_with_hermes() -> sqlite3.Connection:
     """DB with HERMES INTERNATIONAL (FR, with SIREN) and a DELPHINE company."""
@@ -459,7 +458,10 @@ def test_bodacc_hermes_gastronomie_must_not_match_hermes_international():
         famille="Procédures collectives",
     )
     result = _match_notice_to_registry(
-        db, notice, "HERMES INTERNATIONAL", registry_id=1,
+        db,
+        notice,
+        "HERMES INTERNATIONAL",
+        registry_id=1,
     )
     # HERMES INTERNATIONAL has known SIREN 572061123.
     # Notice lacks SIREN → must be rejected.
@@ -476,7 +478,10 @@ def test_bodacc_sci_hermes_must_not_match_hermes_international():
         famille="Procédures collectives",
     )
     result = _match_notice_to_registry(
-        db, notice, "HERMES INTERNATIONAL", registry_id=1,
+        db,
+        notice,
+        "HERMES INTERNATIONAL",
+        registry_id=1,
     )
     assert result.is_rejected, f"Expected rejected, got {result.status}: {result.reason}"
 
@@ -491,7 +496,10 @@ def test_bodacc_delphine_limousin_must_not_match_delphine_sas():
         famille="Procédures collectives",
     )
     result = _match_notice_to_registry(
-        db, notice, "DELPHINE SAS", registry_id=2,
+        db,
+        notice,
+        "DELPHINE SAS",
+        registry_id=2,
     )
     # DELPHINE SAS has no SIREN, and "delphine" is a known ambiguous token
     assert result.is_rejected, f"Expected rejected, got {result.status}: {result.reason}"
@@ -508,7 +516,10 @@ def test_bodacc_genuine_siren_match_still_works():
     )
     notice["siren"] = "351826335"
     result = _match_notice_to_registry(
-        db, notice, "RENAULT SAS", registry_id=4,
+        db,
+        notice,
+        "RENAULT SAS",
+        registry_id=4,
     )
     assert result.is_confirmed, f"Expected confirmed, got {result.status}: {result.reason}"
 
@@ -523,7 +534,10 @@ def test_bodacc_non_french_jurisdiction_rejected():
         famille="Procédures collectives",
     )
     result = _match_notice_to_registry(
-        db, notice, "Airbus SE", registry_id=5,
+        db,
+        notice,
+        "Airbus SE",
+        registry_id=5,
     )
     assert result.is_rejected, f"Expected rejected for NL jurisdiction, got {result.status}"
 
@@ -540,8 +554,13 @@ def test_bodacc_exact_name_still_confirms():
     # Use RENAULT SAS entity but with TotalEnergies name — this tests exact match
     # (TotalEnergies doesn't have SIREN → won't be rejected by require_official_id)
     result = _match_notice_to_registry(
-        db, notice, "TotalEnergies SE", registry_id=3,
+        db,
+        notice,
+        "TotalEnergies SE",
+        registry_id=3,
     )
     # TotalEnergies tokens: ['totalenergies']; notice tokens: {'totalenergies'}
     # exact_legal_name_match: normalize('TotalEnergies')='totalenergies' vs normalize('TOTALENERGIES SE')='totalenergies' → match
-    assert result.is_confirmed, f"Expected confirmed exact name, got {result.status}: {result.reason}"
+    assert result.is_confirmed, (
+        f"Expected confirmed exact name, got {result.status}: {result.reason}"
+    )

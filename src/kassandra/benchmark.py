@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SignalPoint:
     """A point-in-time adverse signal."""
+
     date: str  # ISO date (YYYY-MM-DD)
     description: str
     event_type: str
@@ -47,6 +48,7 @@ class SignalPoint:
 @dataclass
 class DistressedCase:
     """A known case of corporate deterioration."""
+
     case_id: str
     company_name: str
     jurisdiction: str  # ISO 3166-1 alpha-2
@@ -88,7 +90,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="profit_warning",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Carillion announces a provision of £845 million against its support services and construction contracts. CEO Richard Howson steps down with immediate effect."
+                excerpt="Carillion announces a provision of £845 million against its support services and construction contracts. CEO Richard Howson steps down with immediate effect.",
             ),
             SignalPoint(
                 date="2017-09-29",
@@ -96,7 +98,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="profit_warning",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Carillion announces further contract provisions and suspends the 2017 dividend. Net debt at half-year higher than market expectations."
+                excerpt="Carillion announces further contract provisions and suspends the 2017 dividend. Net debt at half-year higher than market expectations.",
             ),
             SignalPoint(
                 date="2017-11-17",
@@ -104,7 +106,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="profit_warning",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Carillion warns on further covenant breaches and announces additional provisions, bringing total write-downs to over £1 billion."
+                excerpt="Carillion warns on further covenant breaches and announces additional provisions, bringing total write-downs to over £1 billion.",
             ),
             SignalPoint(
                 date="2018-01-14",
@@ -112,12 +114,11 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="insolvency",
                 severity="critical",
                 source_type="press_release",
-                excerpt="The Board of Carillion announced it had no choice but to take steps to enter into compulsory liquidation with immediate effect."
+                excerpt="The Board of Carillion announced it had no choice but to take steps to enter into compulsory liquidation with immediate effect.",
             ),
         ],
-        notes="Three profit warnings between July-Nov 2017 before liquidation Jan 2018. Filed extensive accounts at Companies House. Gazette notices published post-liquidation."
+        notes="Three profit warnings between July-Nov 2017 before liquidation Jan 2018. Filed extensive accounts at Companies House. Gazette notices published post-liquidation.",
     ),
-
     DistressedCase(
         case_id="C002_thomas_cook",
         company_name="Thomas Cook Group Plc",
@@ -136,7 +137,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="profit_warning",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Thomas Cook warns that full year underlying EBIT will be lower than market expectations due to weaker summer trading."
+                excerpt="Thomas Cook warns that full year underlying EBIT will be lower than market expectations due to weaker summer trading.",
             ),
             SignalPoint(
                 date="2019-02-07",
@@ -144,7 +145,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="profit_warning",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Thomas Cook issues another profit warning and announces a strategic review of its airline business."
+                excerpt="Thomas Cook issues another profit warning and announces a strategic review of its airline business.",
             ),
             SignalPoint(
                 date="2019-05-16",
@@ -152,7 +153,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="going_concern_warning",
                 severity="high",
                 source_type="regulatory_filing",
-                excerpt="E&Y flags material uncertainty regarding Thomas Cook's ability to continue as a going concern after £1.5bn half-year loss."
+                excerpt="E&Y flags material uncertainty regarding Thomas Cook's ability to continue as a going concern after £1.5bn half-year loss.",
             ),
             SignalPoint(
                 date="2019-07-12",
@@ -160,7 +161,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="refinancing_stress",
                 severity="high",
                 source_type="press_release",
-                excerpt="Thomas Cook confirms it is in advanced discussions with Fosun and its banks for a £750m recapitalisation."
+                excerpt="Thomas Cook confirms it is in advanced discussions with Fosun and its banks for a £750m recapitalisation.",
             ),
             SignalPoint(
                 date="2019-09-20",
@@ -168,12 +169,11 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="refinancing_stress",
                 severity="high",
                 source_type="press_release",
-                excerpt="Thomas Cook confirms that discussions with stakeholders have not resulted in agreement, and the Board concludes there is no choice but to enter compulsory liquidation."
+                excerpt="Thomas Cook confirms that discussions with stakeholders have not resulted in agreement, and the Board concludes there is no choice but to enter compulsory liquidation.",
             ),
         ],
-        notes="Multiple profit warnings in 2018-2019 before Sep 2019 collapse. Had going concern warning from auditors in May 2019. Gazette notices post-liquidation."
+        notes="Multiple profit warnings in 2018-2019 before Sep 2019 collapse. Had going concern warning from auditors in May 2019. Gazette notices post-liquidation.",
     ),
-
     DistressedCase(
         case_id="C003_wirecard",
         company_name="Wirecard AG",
@@ -192,7 +192,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="litigation_material",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Financial Times investigation alleges fraud and forgery at Wirecard's Singapore office."
+                excerpt="Financial Times investigation alleges fraud and forgery at Wirecard's Singapore office.",
             ),
             SignalPoint(
                 date="2019-10-22",
@@ -200,7 +200,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="auditor_warning",
                 severity="high",
                 source_type="regulatory_filing",
-                excerpt="KPMG special audit report states it was unable to verify the existence of large parts of Wirecard's reported business."
+                excerpt="KPMG special audit report states it was unable to verify the existence of large parts of Wirecard's reported business.",
             ),
             SignalPoint(
                 date="2020-06-18",
@@ -208,7 +208,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="auditor_departure",
                 severity="medium",
                 source_type="regulatory_filing",
-                excerpt="EY refuses to sign off Wirecard's 2019 accounts, stating €1.9 billion in cash balances likely do not exist."
+                excerpt="EY refuses to sign off Wirecard's 2019 accounts, stating €1.9 billion in cash balances likely do not exist.",
             ),
             SignalPoint(
                 date="2020-06-22",
@@ -216,12 +216,11 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="litigation_material",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Wirecard CEO Markus Braun arrested by Munich prosecutors. Company admits €1.9 billion in cash balances probably do not exist."
+                excerpt="Wirecard CEO Markus Braun arrested by Munich prosecutors. Company admits €1.9 billion in cash balances probably do not exist.",
             ),
         ],
-        notes="German DAX company. Auditor refusal to sign accounts was the crystallising event. Limited UK Companies House data since German entity."
+        notes="German DAX company. Auditor refusal to sign accounts was the crystallising event. Limited UK Companies House data since German entity.",
     ),
-
     DistressedCase(
         case_id="C004_patisserie_holdings",
         company_name="Patisserie Holdings Plc",
@@ -240,7 +239,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="litigation_material",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Patisserie Holdings announces discovery of significant and potentially fraudulent accounting irregularities, shares suspended."
+                excerpt="Patisserie Holdings announces discovery of significant and potentially fraudulent accounting irregularities, shares suspended.",
             ),
             SignalPoint(
                 date="2018-10-11",
@@ -248,7 +247,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="payment_stress",
                 severity="high",
                 source_type="press_release",
-                excerpt="Patisserie Holdings finance director Chris Marsh arrested. Company's actual cash position is £1.14m, not the £9.8m previously reported."
+                excerpt="Patisserie Holdings finance director Chris Marsh arrested. Company's actual cash position is £1.14m, not the £9.8m previously reported.",
             ),
             SignalPoint(
                 date="2018-10-12",
@@ -256,12 +255,11 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="insolvency",
                 severity="critical",
                 source_type="gazette",
-                excerpt="HM Revenue & Customs files winding-up petition against Patisserie Holdings for £1.14m unpaid tax."
+                excerpt="HM Revenue & Customs files winding-up petition against Patisserie Holdings for £1.14m unpaid tax.",
             ),
         ],
-        notes="Very sudden: fraud discovered Oct 10, in administration by Jan 22. Gazette winding-up petition filed by HMRC was an early public signal. UK registered company."
+        notes="Very sudden: fraud discovered Oct 10, in administration by Jan 22. Gazette winding-up petition filed by HMRC was an early public signal. UK registered company.",
     ),
-
     DistressedCase(
         case_id="C005_intsr_petrofac",
         company_name="Interserve Plc",
@@ -280,7 +278,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="profit_warning",
                 severity="medium",
                 source_type="press_release",
-                excerpt="Interserve issues profit warning due to significant cost overruns on energy-from-waste contracts."
+                excerpt="Interserve issues profit warning due to significant cost overruns on energy-from-waste contracts.",
             ),
             SignalPoint(
                 date="2018-03-27",
@@ -288,7 +286,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="restructuring",
                 severity="high",
                 source_type="press_release",
-                excerpt="Interserve announces debt restructuring plan involving deleveraging and conversion of debt to equity."
+                excerpt="Interserve announces debt restructuring plan involving deleveraging and conversion of debt to equity.",
             ),
             SignalPoint(
                 date="2018-12-07",
@@ -296,7 +294,7 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="restructuring",
                 severity="high",
                 source_type="press_release",
-                excerpt="Interserve shareholders reject deleveraging plan, company warns it may need to enter administration."
+                excerpt="Interserve shareholders reject deleveraging plan, company warns it may need to enter administration.",
             ),
             SignalPoint(
                 date="2019-03-15",
@@ -304,9 +302,9 @@ BENCHMARK_CASES: list[DistressedCase] = [
                 event_type="insolvency",
                 severity="critical",
                 source_type="press_release",
-                excerpt="Interserve Plc enters administration. Business and assets sold to newly incorporated company controlled by lenders."
+                excerpt="Interserve Plc enters administration. Business and assets sold to newly incorporated company controlled by lenders.",
             ),
         ],
-        notes="Gradual deterioration: profit warning Sep 2017 → restructuring Mar 2018 → administration Mar 2019. 18-month lead time from first warning."
+        notes="Gradual deterioration: profit warning Sep 2017 → restructuring Mar 2018 → administration Mar 2019. 18-month lead time from first warning.",
     ),
 ]

@@ -11,49 +11,78 @@ without timing out.
 import asyncio
 import hashlib
 import logging
-import re
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urljoin, urlparse
-from xml.etree import ElementTree
 
 import feedparser
 import httpx
-from bs4 import BeautifulSoup
 
 from kassandra.config import get_config
 from kassandra.evidence import store_evidence
+from kassandra.http_security import ResponseTooLargeError, URLSafetyError, safe_get_async
 
 logger = logging.getLogger(__name__)
 
 COMMON_FEED_PATHS = [
-    "/rss.xml", "/feed", "/news/rss", "/press/rss", "/en/rss",
+    "/rss.xml",
+    "/feed",
+    "/news/rss",
+    "/press/rss",
+    "/en/rss",
 ]
 
 SITEMAP_PATHS = [
-    "/sitemap.xml", "/sitemap_index.xml",
+    "/sitemap.xml",
+    "/sitemap_index.xml",
 ]
 
 
 class AsyncWebMonitor:
     """Discover and monitor company websites and feeds concurrently."""
 
-    def __init__(self, user_agent: str = "Kassandra/0.2 (+https://github.com/Maar10Herr/Kassandra-Public)"):
+    def __init__(
+        self,
+        user_agent: str = "Kassandra/0.2 (+https://github.com/Maar10Herr/Kassandra-Public)",
+        max_concurrency: int = 10,
+    ):
+        if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int):
+            raise TypeError("max_concurrency must be an integer")
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be positive")
         self._headers = {"User-Agent": user_agent}
         self._config = get_config()
+        self._max_concurrency = max_concurrency
 
-    async def monitor_all_companies(
-        self, db: Any, companies: list[dict]
-    ) -> dict[int, int]:
+    async def monitor_all_companies(self, db: Any, companies: list[dict]) -> dict[int, int]:
         """Monitor all companies in parallel. Returns {registry_id: evidence_count}."""
+        # Fixed workers avoid creating one task per portfolio row. This keeps
+        # memory and active requests bounded even when a malformed database has
+        # an unexpectedly large registry table.
+        results: list[int | Exception] = [0] * len(companies)
+        next_index = 0
+
+        async def monitor_bounded(client: httpx.AsyncClient) -> None:
+            nonlocal next_index
+            while next_index < len(companies):
+                index = next_index
+                next_index += 1
+                try:
+                    results[index] = await self._monitor_one(client, db, companies[index])
+                except Exception as exc:
+                    results[index] = exc
+
         async with httpx.AsyncClient(
-            timeout=20, follow_redirects=True, headers=self._headers
+            timeout=20,
+            follow_redirects=False,
+            headers=self._headers,
+            trust_env=False,
+            limits=httpx.Limits(
+                max_connections=self._max_concurrency,
+                max_keepalive_connections=self._max_concurrency,
+            ),
         ) as client:
-            tasks = []
-            for company in companies:
-                tasks.append(self._monitor_one(client, db, company))
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            workers = min(self._max_concurrency, len(companies))
+            await asyncio.gather(*(monitor_bounded(client) for _ in range(workers)))
 
         counts = {}
         for i, result in enumerate(results):
@@ -65,12 +94,10 @@ class AsyncWebMonitor:
                 counts[rid] = result
         return counts
 
-    async def _monitor_one(
-        self, client: httpx.AsyncClient, db: Any, company: dict
-    ) -> int:
+    async def _monitor_one(self, client: httpx.AsyncClient, db: Any, company: dict) -> int:
         """Monitor a single company. Returns new evidence count."""
         collected = 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         registry_id = company["registry_id"]
         domain = company.get("domain")
         feed_url = company.get("feed_url")
@@ -87,9 +114,8 @@ class AsyncWebMonitor:
 
         # Quick feed discovery
         from kassandra.sources.known_feeds import get_known_feeds, has_no_feed
-        isin_row = db.execute(
-            "SELECT isin FROM registry WHERE id = ?", (registry_id,)
-        ).fetchone()
+
+        isin_row = db.execute("SELECT isin FROM registry WHERE id = ?", (registry_id,)).fetchone()
         if isin_row and not has_no_feed(isin_row["isin"]):
             feed_urls.extend(get_known_feeds(isin_row["isin"]))
 
@@ -108,8 +134,7 @@ class AsyncWebMonitor:
         return collected
 
     async def _monitor_feed(
-        self, client: httpx.AsyncClient, db: Any, registry_id: int,
-        feed_url: str, now: str
+        self, client: httpx.AsyncClient, db: Any, registry_id: int, feed_url: str, now: str
     ) -> int:
         """Monitor an RSS/Atom feed. Returns count of new evidence items."""
         collected = 0
@@ -123,29 +148,31 @@ class AsyncWebMonitor:
                 return 0
 
             ev_result = store_evidence(
-                db=db, content=content, source_url=feed_url,
-                retrieval_time=now, extraction_method="web_monitor_feed",
-                parser_version="2.0.0", content_type="application/xml",
+                db=db,
+                content=content,
+                source_url=feed_url,
+                retrieval_time=now,
+                extraction_method="web_monitor_feed",
+                parser_version="2.0.0",
+                content_type="application/xml",
                 excerpt=content[:2000],
             )
-            evidence_id = ev_result.evidence_id
-            collected += 1
+            collected += int(ev_result.is_new)
 
             for entry in feed.entries[:5]:
                 entry_text = f"Title: {entry.get('title', '')}\nSummary: {entry.get('summary', entry.get('description', ''))}"
-                entry_hash = hashlib.sha256(entry_text.encode()).hexdigest()
-
                 ev_result = store_evidence(
-                    db=db, content=entry_text,
+                    db=db,
+                    content=entry_text,
                     source_url=entry.get("link", feed_url),
                     retrieval_time=now,
                     publication_time=entry.get("published") or entry.get("updated"),
                     extraction_method="web_monitor_feed_entry",
-                    parser_version="2.0.0", content_type="text/plain",
+                    parser_version="2.0.0",
+                    content_type="text/plain",
                     excerpt=entry.get("title", "")[:500],
                 )
-                evidence_id = ev_result.evidence_id
-                collected += 1
+                collected += int(ev_result.is_new)
 
         except Exception as e:
             logger.debug(f"Feed monitor failed for {feed_url}: {e}")
@@ -153,23 +180,32 @@ class AsyncWebMonitor:
         return collected
 
     async def _monitor_page(
-        self, client: httpx.AsyncClient, db: Any, registry_id: int,
-        url: str, now: str, page_type: str
+        self,
+        client: httpx.AsyncClient,
+        db: Any,
+        registry_id: int,
+        url: str,
+        now: str,
+        page_type: str,
     ) -> int:
         """Monitor a single web page for changes."""
         content, status = await self._conditional_fetch(client, db, url)
         if status == 200 and content:
             ev_result = store_evidence(
-                db=db, content=content, source_url=url,
+                db=db,
+                content=content,
+                source_url=url,
                 retrieval_time=now,
                 extraction_method=f"web_monitor_{page_type}",
-                parser_version="2.0.0", content_type="text/html",
+                parser_version="2.0.0",
+                content_type="text/html",
                 excerpt=content[:2000],
             )
-            evidence_id = ev_result.evidence_id
-            from kassandra.classifier import extract_events_from_evidence
-            extract_events_from_evidence(db, evidence_id, registry_id)
-            return 1
+            if ev_result.is_new:
+                from kassandra.classifier import extract_events_from_evidence
+
+                extract_events_from_evidence(db, ev_result.evidence_id, registry_id)
+                return 1
         return 0
 
     async def _conditional_fetch(
@@ -190,7 +226,7 @@ class AsyncWebMonitor:
                 headers["If-Modified-Since"] = cache["last_modified"]
 
         try:
-            resp = await client.get(url, headers=headers)
+            resp = await safe_get_async(client, url, headers=headers)
             status = resp.status_code
 
             content_hash = None
@@ -212,23 +248,23 @@ class AsyncWebMonitor:
             self._update_cache(db, url, dict(resp.headers), status)
             return None, status
 
-        except Exception:
+        except (httpx.HTTPError, URLSafetyError, ResponseTooLargeError) as exc:
+            logger.warning("Fetch failed for %s: %s", url, exc)
             db.execute(
                 """INSERT INTO web_cache (url, last_checked_at, consecutive_failures)
                    VALUES (?, ?, 1)
                    ON CONFLICT(url) DO UPDATE SET
                    consecutive_failures = consecutive_failures + 1,
                    last_checked_at = excluded.last_checked_at""",
-                (url, datetime.now(timezone.utc).isoformat()),
+                (url, datetime.now(UTC).isoformat()),
             )
             db.commit()
             return None, 0
 
     def _update_cache(
-        self, db: Any, url: str, headers: dict, status: int,
-        content_hash: str | None = None
+        self, db: Any, url: str, headers: dict, status: int, content_hash: str | None = None
     ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         db.execute(
             """INSERT INTO web_cache
                (url, last_etag, last_modified, last_content_hash,
@@ -241,7 +277,6 @@ class AsyncWebMonitor:
                last_status_code = excluded.last_status_code,
                last_checked_at = excluded.last_checked_at,
                consecutive_failures = 0""",
-            (url, headers.get("etag"), headers.get("last-modified"),
-             content_hash, status, now),
+            (url, headers.get("etag"), headers.get("last-modified"), content_hash, status, now),
         )
         db.commit()

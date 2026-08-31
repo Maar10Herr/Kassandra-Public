@@ -10,10 +10,9 @@ No paid APIs. No search. No authentication bypass.
 import hashlib
 import logging
 import re
-import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 from xml.etree import ElementTree
 
 import feedparser
@@ -22,32 +21,61 @@ from bs4 import BeautifulSoup
 
 from kassandra.config import get_config
 from kassandra.evidence import store_evidence
+from kassandra.http_security import (
+    MAX_URL_LENGTH,
+    ResponseTooLargeError,
+    URLSafetyError,
+    safe_get,
+)
 
 logger = logging.getLogger(__name__)
 
 # Common feed paths to try when <link rel="alternate"> not found
 COMMON_FEED_PATHS = [
-    "/feed", "/rss", "/feed.xml", "/rss.xml", "/atom.xml",
-    "/news/feed", "/news/rss", "/en/feed", "/en/rss",
-    "/investors/rss", "/investor-relations/rss", "/ir/rss",
-    "/press/feed", "/press/rss", "/media/feed",
-    "/feeds/press", "/rss/news", "/api/feed",
+    "/feed",
+    "/rss",
+    "/feed.xml",
+    "/rss.xml",
+    "/atom.xml",
+    "/news/feed",
+    "/news/rss",
+    "/en/feed",
+    "/en/rss",
+    "/investors/rss",
+    "/investor-relations/rss",
+    "/ir/rss",
+    "/press/feed",
+    "/press/rss",
+    "/media/feed",
+    "/feeds/press",
+    "/rss/news",
+    "/api/feed",
 ]
 
 # Common sitemap paths
 SITEMAP_PATHS = [
-    "/sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml",
-    "/sitemap.php", "/sitemap/sitemap.xml",
+    "/sitemap.xml",
+    "/sitemap_index.xml",
+    "/sitemap-index.xml",
+    "/sitemap.php",
+    "/sitemap/sitemap.xml",
 ]
+
+MAX_DISCOVERED_FEEDS = 50
+MAX_SITEMAP_URLS = 500
+MAX_SITEMAP_DOCUMENTS = 100
 
 
 class WebMonitor:
     """Discover and monitor company websites and feeds."""
 
-    def __init__(self, user_agent: str = "Kassandra/0.1 (+https://github.com/Maar10Herr/Kassandra-Public)"):
+    def __init__(
+        self, user_agent: str = "Kassandra/0.1 (+https://github.com/Maar10Herr/Kassandra-Public)"
+    ):
         self._client = httpx.Client(
             timeout=30,
-            follow_redirects=True,
+            follow_redirects=False,
+            trust_env=False,
             headers={"User-Agent": user_agent},
         )
         self._config = get_config()
@@ -63,7 +91,7 @@ class WebMonitor:
         feeds: list[str] = []
 
         try:
-            resp = self._client.get(base_url, timeout=15)
+            resp = safe_get(self._client, base_url, timeout=15)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "lxml")
 
@@ -76,6 +104,8 @@ class WebMonitor:
                     if feed_url not in feeds:
                         feeds.append(feed_url)
                         logger.info(f"Found feed via <link>: {feed_url}")
+                        if len(feeds) >= MAX_DISCOVERED_FEEDS:
+                            return feeds
 
             # 2. Search for RSS href patterns in all <a> and <link> tags
             rss_patterns = ["/rss", "/feed", "press-release", "pressrelease"]
@@ -88,43 +118,68 @@ class WebMonitor:
                         feed_url = urljoin(base_url, href)
                         if feed_url not in feeds:
                             feeds.append(feed_url)
+                            if len(feeds) >= MAX_DISCOVERED_FEEDS:
+                                return feeds
 
             # 3. Only try common paths if nothing found (reduced from 17 to 5)
             if not feeds:
                 for path in ["/rss.xml", "/feed", "/news/rss", "/press/rss", "/en/rss"]:
                     try:
                         feed_url = urljoin(base_url, path)
-                        r = self._client.get(feed_url, timeout=10)
+                        r = safe_get(self._client, feed_url, timeout=10)
                         if r.status_code == 200:
                             ct = r.headers.get("content-type", "")
                             if any(t in ct for t in ("xml", "rss", "atom")):
                                 feeds.append(feed_url)
-                    except httpx.HTTPError:
+                                if len(feeds) >= MAX_DISCOVERED_FEEDS:
+                                    return feeds[:MAX_DISCOVERED_FEEDS]
+                    except (httpx.HTTPError, URLSafetyError, ResponseTooLargeError):
                         continue
 
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, URLSafetyError, ResponseTooLargeError) as e:
             logger.warning(f"Feed discovery failed for {base_url}: {e}")
 
         return feeds
 
     def fetch_sitemap_urls(self, base_url: str, max_urls: int = 50) -> list[str]:
-        """Fetch URLs from sitemap.xml (robots-aware).
+        """Fetch URLs from sitemap.xml using robots.txt Sitemap hints.
 
         Respects robots.txt for sitemap location hints.
         """
+        if isinstance(max_urls, bool) or not isinstance(max_urls, int) or max_urls < 0:
+            raise ValueError("max_urls must be a non-negative integer")
+        max_urls = min(max_urls, MAX_SITEMAP_URLS)
+        if max_urls == 0:
+            return []
         urls: list[str] = []
+        visited: set[str] = set()
 
         try:
             # Try robots.txt first for Sitemap: directive
             robots_url = urljoin(base_url, "/robots.txt")
             try:
-                r = self._client.get(robots_url, timeout=10)
+                r = safe_get(self._client, robots_url, timeout=10)
                 if r.status_code == 200:
                     for line in r.text.splitlines():
                         if line.lower().startswith("sitemap:"):
                             sitemap_url = line.split(":", 1)[1].strip()
-                            urls.extend(self._parse_sitemap(sitemap_url, max_urls))
-            except httpx.HTTPError:
+                            if not sitemap_url or len(sitemap_url) > MAX_URL_LENGTH:
+                                continue
+                            urls.extend(
+                                self._parse_sitemap(
+                                    sitemap_url,
+                                    max_urls - len(urls),
+                                    visited=visited,
+                                )
+                            )
+                            if len(urls) >= max_urls:
+                                break
+            except (
+                httpx.HTTPError,
+                URLSafetyError,
+                ResponseTooLargeError,
+                ElementTree.ParseError,
+            ):
                 pass
 
             # Try common sitemap paths
@@ -133,8 +188,19 @@ class WebMonitor:
                     break
                 try:
                     sitemap_url = urljoin(base_url, path)
-                    urls.extend(self._parse_sitemap(sitemap_url, max_urls - len(urls)))
-                except (httpx.HTTPError, ElementTree.ParseError):
+                    urls.extend(
+                        self._parse_sitemap(
+                            sitemap_url,
+                            max_urls - len(urls),
+                            visited=visited,
+                        )
+                    )
+                except (
+                    httpx.HTTPError,
+                    URLSafetyError,
+                    ResponseTooLargeError,
+                    ElementTree.ParseError,
+                ):
                     continue
 
         except Exception as e:
@@ -142,10 +208,24 @@ class WebMonitor:
 
         return urls[:max_urls]
 
-    def _parse_sitemap(self, sitemap_url: str, max_urls: int) -> list[str]:
-        """Parse a sitemap XML, handling sitemap index files."""
+    def _parse_sitemap(
+        self,
+        sitemap_url: str,
+        max_urls: int,
+        *,
+        visited: set[str] | None = None,
+        depth: int = 0,
+    ) -> list[str]:
+        """Parse a sitemap with bounded, cycle-safe index traversal."""
+        if max_urls <= 0 or depth > 3:
+            return []
+        if visited is None:
+            visited = set()
+        if sitemap_url in visited or len(visited) >= MAX_SITEMAP_DOCUMENTS:
+            return []
+        visited.add(sitemap_url)
         urls: list[str] = []
-        resp = self._client.get(sitemap_url, timeout=15)
+        resp = safe_get(self._client, sitemap_url, timeout=15)
         resp.raise_for_status()
 
         # Remove namespace for easier parsing
@@ -156,16 +236,28 @@ class WebMonitor:
         if root.tag == "sitemapindex":
             for sm in root.findall("sitemap"):
                 loc = sm.findtext("loc")
-                if loc and len(urls) < max_urls:
+                if loc and len(loc) <= MAX_URL_LENGTH and len(urls) < max_urls:
                     try:
-                        urls.extend(self._parse_sitemap(loc, max_urls - len(urls)))
-                    except (httpx.HTTPError, ElementTree.ParseError):
+                        urls.extend(
+                            self._parse_sitemap(
+                                loc,
+                                max_urls - len(urls),
+                                visited=visited,
+                                depth=depth + 1,
+                            )
+                        )
+                    except (
+                        httpx.HTTPError,
+                        URLSafetyError,
+                        ResponseTooLargeError,
+                        ElementTree.ParseError,
+                    ):
                         continue
         # Regular sitemap
         else:
             for url_elem in root.findall("url"):
                 loc = url_elem.findtext("loc")
-                if loc:
+                if loc and len(loc) <= MAX_URL_LENGTH:
                     urls.append(loc)
                     if len(urls) >= max_urls:
                         break
@@ -192,7 +284,7 @@ class WebMonitor:
                 headers["If-Modified-Since"] = cache["last_modified"]
 
         try:
-            resp = self._client.get(url, headers=headers, timeout=20)
+            resp = safe_get(self._client, url, headers=headers, timeout=20)
             status = resp.status_code
 
             if status == 304:
@@ -215,7 +307,7 @@ class WebMonitor:
             self._update_cache(db, url, resp.headers, status)
             return None, status, None
 
-        except httpx.HTTPError as e:
+        except (httpx.HTTPError, URLSafetyError, ResponseTooLargeError) as e:
             logger.warning(f"Fetch failed for {url}: {e}")
             db.execute(
                 """INSERT INTO web_cache (url, last_checked_at, consecutive_failures)
@@ -223,7 +315,7 @@ class WebMonitor:
                    ON CONFLICT(url) DO UPDATE SET
                    consecutive_failures = consecutive_failures + 1,
                    last_checked_at = excluded.last_checked_at""",
-                (url, datetime.now(timezone.utc).isoformat()),
+                (url, datetime.now(UTC).isoformat()),
             )
             db.commit()
             return None, 0, None
@@ -237,7 +329,7 @@ class WebMonitor:
         content_hash: str | None = None,
     ) -> None:
         """Update the web cache with response metadata."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         db.execute(
             """INSERT INTO web_cache
                (url, last_etag, last_modified, last_content_hash,
@@ -274,7 +366,7 @@ class WebMonitor:
         Discovers feeds, fetches sitemaps, checks IR pages for changes.
         """
         collected = 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         base_url = f"https://{domain}" if domain else None
 
@@ -287,6 +379,7 @@ class WebMonitor:
 
         # Add known feeds from static data
         from kassandra.sources.known_feeds import get_known_feeds
+
         isin = db.execute("SELECT isin FROM registry WHERE id = ?", (registry_id,)).fetchone()
         if isin:
             feed_urls.extend(get_known_feeds(isin["isin"]))
@@ -313,9 +406,9 @@ class WebMonitor:
                         content_type="text/html",
                         excerpt=content[:2000],
                     )
-                    evidence_id = ev_result.evidence_id
-                    collected += 1
-                    _classify_and_store(db, evidence_id, registry_id)
+                    if ev_result.is_new:
+                        collected += 1
+                        _classify_and_store(db, ev_result.evidence_id, registry_id)
                     break
 
         # 3. Monitor homepage for changes
@@ -324,9 +417,7 @@ class WebMonitor:
 
         return collected
 
-    def _monitor_feed(
-        self, db: Any, registry_id: int, feed_url: str, now: str
-    ) -> int:
+    def _monitor_feed(self, db: Any, registry_id: int, feed_url: str, now: str) -> int:
         """Monitor an RSS/Atom feed. Returns count of new evidence items."""
         collected = 0
 
@@ -352,8 +443,7 @@ class WebMonitor:
                 content_type="application/xml",
                 excerpt=content[:2000],
             )
-            evidence_id = ev_result.evidence_id
-            collected += 1
+            collected += int(ev_result.is_new)
 
             # Store individual feed entries as evidence items
             for entry in feed.entries[:10]:
@@ -361,8 +451,6 @@ class WebMonitor:
                 entry_content += f"Link: {entry.get('link', '')}\n"
                 entry_content += f"Published: {entry.get('published', '')}\n"
                 entry_content += f"Summary: {entry.get('summary', entry.get('description', ''))}\n"
-
-                entry_hash = hashlib.sha256(entry_content.encode()).hexdigest()
 
                 ev_result = store_evidence(
                     db=db,
@@ -375,17 +463,14 @@ class WebMonitor:
                     content_type="text/plain",
                     excerpt=entry.get("title", "")[:500],
                 )
-                evidence_id = ev_result.evidence_id
-                collected += 1
+                collected += int(ev_result.is_new)
 
         except Exception as e:
             logger.warning(f"Feed monitor failed for {feed_url}: {e}")
 
         return collected
 
-    def _monitor_page(
-        self, db: Any, registry_id: int, url: str, now: str, page_type: str
-    ) -> int:
+    def _monitor_page(self, db: Any, registry_id: int, url: str, now: str, page_type: str) -> int:
         """Monitor a single web page for changes."""
         content, status, content_hash = self.conditional_fetch(url, db)
         if status == 200 and content:
@@ -399,13 +484,14 @@ class WebMonitor:
                 content_type="text/html",
                 excerpt=content[:2000],
             )
-            evidence_id = ev_result.evidence_id
-            _classify_and_store(db, evidence_id, registry_id)
-            return 1
+            if ev_result.is_new:
+                _classify_and_store(db, ev_result.evidence_id, registry_id)
+                return 1
         return 0
 
 
 def _classify_and_store(db: Any, evidence_id: int, registry_id: int) -> int:
     """Classify evidence content and store material events."""
     from kassandra.classifier import extract_events_from_evidence
+
     return extract_events_from_evidence(db, evidence_id, registry_id)

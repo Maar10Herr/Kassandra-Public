@@ -13,18 +13,16 @@ Covers:
   - CollectionMetrics type
 """
 
-import json
 import sqlite3
 import tempfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 
-from kassandra.db import _connect, migrate, SCHEMA_VERSION, MIGRATIONS
-
+from kassandra.db import MIGRATIONS, SCHEMA_VERSION, _connect, migrate
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _temp_db():
     """Create a temporary on-disk SQLite database for testing."""
@@ -71,9 +69,7 @@ def _migrate_to_version(db, version):
         applied_at TEXT NOT NULL DEFAULT (datetime('now'))
     )""")
     db.commit()
-    current = db.execute(
-        "SELECT MAX(version) FROM schema_version"
-    ).fetchone()[0] or 0
+    current = db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] or 0
     for v in sorted(MIGRATIONS.keys()):
         if v > current and v <= version:
             try:
@@ -87,20 +83,17 @@ def _migrate_to_version(db, version):
 
 # ── RED tests for missing structures ──────────────────────────────────────────
 
+
 class TestSourceRunsTableExists:
     """Migration 11 must create the source_runs table."""
 
     def test_source_runs_table_after_fresh_migration(self):
         """RED: source_runs table MUST exist after a clean bootstrap."""
         db = _fresh_migrated_db()
-        tables = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         table_names = {t["name"] for t in tables}
         db.close()
-        assert "source_runs" in table_names, (
-            "source_runs table missing from clean migration"
-        )
+        assert "source_runs" in table_names, "source_runs table missing from clean migration"
 
     def test_source_runs_columns(self):
         """Verify source_runs has all required columns."""
@@ -108,15 +101,25 @@ class TestSourceRunsTableExists:
         cols = _table_columns(db, "source_runs")
         db.close()
         required = {
-            "id", "run_id", "source_name",
-            "documents_discovered", "documents_fetched",
-            "new_documents", "duplicate_documents",
-            "candidates_generated", "unconfirmed_matches",
-            "events_created", "duplicate_events",
-            "errors", "api_errors", "parse_failures",
-            "adverse_events_found", "dependency_edges_extracted",
+            "id",
+            "run_id",
+            "source_name",
+            "documents_discovered",
+            "documents_fetched",
+            "new_documents",
+            "duplicate_documents",
+            "candidates_generated",
+            "unconfirmed_matches",
+            "events_created",
+            "duplicate_events",
+            "errors",
+            "api_errors",
+            "parse_failures",
+            "adverse_events_found",
+            "dependency_edges_extracted",
             "latency_seconds",
-            "started_at", "completed_at",
+            "started_at",
+            "completed_at",
         }
         missing = required - cols
         assert not missing, f"source_runs missing columns: {missing}"
@@ -130,9 +133,7 @@ class TestEconomicEntitiesRegistryId:
         db = _fresh_migrated_db()
         cols = _table_columns(db, "economic_entities")
         db.close()
-        assert "registry_id" in cols, (
-            "economic_entities.registry_id missing from clean migration"
-        )
+        assert "registry_id" in cols, "economic_entities.registry_id missing from clean migration"
 
 
 class TestScoreableCompaniesView:
@@ -149,9 +150,15 @@ class TestScoreableCompaniesView:
         """The view must exclude economic_concept company types."""
         db = _fresh_migrated_db()
         # Insert test data
-        db.execute("INSERT INTO registry (id, canonical_name, company_type, domain) VALUES (1, 'PortfolioCo', NULL, 'pc.com')")
-        db.execute("INSERT INTO registry (id, canonical_name, company_type, domain) VALUES (2, 'EconConcept', 'economic_concept', 'ec.com')")
-        db.execute("INSERT INTO registry (id, canonical_name, company_type) VALUES (3, 'NoDomainCo', NULL)")
+        db.execute(
+            "INSERT INTO registry (id, canonical_name, company_type, domain) VALUES (1, 'PortfolioCo', NULL, 'pc.com')"
+        )
+        db.execute(
+            "INSERT INTO registry (id, canonical_name, company_type, domain) VALUES (2, 'EconConcept', 'economic_concept', 'ec.com')"
+        )
+        db.execute(
+            "INSERT INTO registry (id, canonical_name, company_type) VALUES (3, 'NoDomainCo', NULL)"
+        )
         db.commit()
         rows = db.execute("SELECT id FROM scoreable_companies").fetchall()
         ids = {r["id"] for r in rows}
@@ -163,15 +170,14 @@ class TestScoreableCompaniesView:
 
 # ── RED tests for lifecycle/provenance structures (migration 12) ──────────────
 
+
 class TestUnconfirmedMatchQueue:
     """Migration 12 must create the unconfirmed_match_queue table."""
 
     def test_table_exists(self):
         """RED: unconfirmed_match_queue table must exist."""
         db = _fresh_migrated_db()
-        tables = db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        tables = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         table_names = {t["name"] for t in tables}
         db.close()
         assert "unconfirmed_match_queue" in table_names, (
@@ -184,13 +190,22 @@ class TestUnconfirmedMatchQueue:
         cols = _table_columns(db, "unconfirmed_match_queue")
         db.close()
         required = {
-            "id", "source_name", "source_entity_name",
-            "candidate_registry_id", "candidate_registry_name",
-            "match_type", "match_confidence",
-            "evidence_id", "evidence_excerpt",
-            "status", "reviewed_by", "reviewed_at",
-            "resolution", "resolution_registry_id",
-            "created_at", "updated_at",
+            "id",
+            "source_name",
+            "source_entity_name",
+            "candidate_registry_id",
+            "candidate_registry_name",
+            "match_type",
+            "match_confidence",
+            "evidence_id",
+            "evidence_excerpt",
+            "status",
+            "reviewed_by",
+            "reviewed_at",
+            "resolution",
+            "resolution_registry_id",
+            "created_at",
+            "updated_at",
         }
         missing = required - cols
         assert not missing, f"unconfirmed_match_queue missing columns: {missing}"
@@ -242,7 +257,10 @@ class TestEventLifecycleColumns:
             (ev_id, reg_id, "insolvency"),
         )
         db.commit()
-        row = db.execute("SELECT active, status, tombstone_reason, tombstoned_at FROM events WHERE id=?", (db.execute("SELECT last_insert_rowid()").fetchone()[0],)).fetchone()
+        row = db.execute(
+            "SELECT active, status, tombstone_reason, tombstoned_at FROM events WHERE id=?",
+            (db.execute("SELECT last_insert_rowid()").fetchone()[0],),
+        ).fetchone()
         db.close()
         assert row["active"] == 1
         assert row["status"] == "active"
@@ -283,6 +301,7 @@ class TestScoreProvenanceColumns:
 
 
 # ── Migration idempotency tests ───────────────────────────────────────────────
+
 
 class TestMigrationIdempotency:
     """Double-migration must be safe."""
@@ -332,6 +351,7 @@ class TestMigrationIdempotency:
 
 # ── Clean bootstrap vs upgrade equivalence ─────────────────────────────────────
 
+
 class TestBootstrapUpgradeEquivalence:
     """A fresh V12 migration must produce the same tables/columns/indexes/views
     as upgrading a V10-like schema."""
@@ -369,9 +389,7 @@ class TestBootstrapUpgradeEquivalence:
         fresh_tables = self._table_and_columns(fresh_db)
         fresh_views = self._views(fresh_db)
         fresh_indexes = self._indexes(fresh_db)
-        fresh_version = fresh_db.execute(
-            "SELECT MAX(version) FROM schema_version"
-        ).fetchone()[0]
+        fresh_version = fresh_db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
         fresh_db.close()
 
         # Upgrade from V10
@@ -384,9 +402,9 @@ class TestBootstrapUpgradeEquivalence:
         upgrade_tables = self._table_and_columns(upgrade_db)
         upgrade_views = self._views(upgrade_db)
         upgrade_indexes = self._indexes(upgrade_db)
-        upgrade_version = upgrade_db.execute(
-            "SELECT MAX(version) FROM schema_version"
-        ).fetchone()[0]
+        upgrade_version = upgrade_db.execute("SELECT MAX(version) FROM schema_version").fetchone()[
+            0
+        ]
         upgrade_db.close()
 
         assert fresh_version == upgrade_version, (
@@ -404,8 +422,7 @@ class TestBootstrapUpgradeEquivalence:
             fc = fresh_tables[tname]
             uc = upgrade_tables[tname]
             assert fc == uc, (
-                f"Column mismatch for table '{tname}': "
-                f"fresh_only={fc - uc}, upgrade_only={uc - fc}"
+                f"Column mismatch for table '{tname}': fresh_only={fc - uc}, upgrade_only={uc - fc}"
             )
 
         # Same views
@@ -423,17 +440,20 @@ class TestBootstrapUpgradeEquivalence:
 
 # ── Typed results tests ───────────────────────────────────────────────────────
 
+
 class TestEvidenceResult:
     """Evidence insertion must return typed results (inserted vs duplicate)."""
 
     def test_import_exists(self):
         """EvidenceResult must be importable."""
         from kassandra.contracts import EvidenceResult
+
         assert EvidenceResult is not None
 
     def test_fields(self):
         """EvidenceResult must have correct fields."""
         from kassandra.contracts import EvidenceResult
+
         result = EvidenceResult(
             evidence_id=1,
             is_new=True,
@@ -446,6 +466,7 @@ class TestEvidenceResult:
     def test_duplicate(self):
         """EvidenceResult for duplicate evidence."""
         from kassandra.contracts import EvidenceResult
+
         result = EvidenceResult(
             evidence_id=42,
             is_new=False,
@@ -461,11 +482,13 @@ class TestEventResult:
     def test_import_exists(self):
         """EventResult must be importable."""
         from kassandra.contracts import EventResult
+
         assert EventResult is not None
 
     def test_inserted(self):
         """EventResult for newly inserted event."""
         from kassandra.contracts import EventResult
+
         result = EventResult(event_id=5, status="inserted")
         assert result.event_id == 5
         assert result.status == "inserted"
@@ -474,6 +497,7 @@ class TestEventResult:
     def test_duplicate(self):
         """EventResult for duplicate event."""
         from kassandra.contracts import EventResult
+
         result = EventResult(event_id=5, status="duplicate")
         assert result.event_id == 5
         assert result.status == "duplicate"
@@ -482,7 +506,10 @@ class TestEventResult:
     def test_rejected(self):
         """EventResult for rejected event with reason."""
         from kassandra.contracts import EventResult
-        result = EventResult(event_id=None, status="rejected", reject_reason="below_confidence_threshold")
+
+        result = EventResult(
+            event_id=None, status="rejected", reject_reason="below_confidence_threshold"
+        )
         assert result.event_id is None
         assert result.status == "rejected"
         assert result.is_new is False
@@ -495,11 +522,13 @@ class TestCollectionMetrics:
     def test_import_exists(self):
         """CollectionMetrics must be importable."""
         from kassandra.contracts import CollectionMetrics
+
         assert CollectionMetrics is not None
 
     def test_all_fields(self):
         """CollectionMetrics must have all required fields."""
         from kassandra.contracts import CollectionMetrics
+
         m = CollectionMetrics(
             run_id="r1",
             source_name="test_source",
@@ -528,6 +557,7 @@ class TestCollectionMetrics:
     def test_must_reconcile_discovered(self):
         """Discovered must equal new + duplicates (+ parse_failures that couldn't be fetched)."""
         from kassandra.contracts import CollectionMetrics
+
         m = CollectionMetrics(
             run_id="r1",
             source_name="test",
@@ -543,6 +573,7 @@ class TestCollectionMetrics:
     def test_to_dict(self):
         """CollectionMetrics must be serializable to dict."""
         from kassandra.contracts import CollectionMetrics
+
         m = CollectionMetrics(
             run_id="r1",
             source_name="test",

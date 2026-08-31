@@ -13,8 +13,7 @@ import hashlib
 import json
 import logging
 import sqlite3
-import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 def start_run(db: sqlite3.Connection, run_type: str = "collection") -> str:
     """Begin an observability run. Returns run_id."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     run_id = f"{run_type}-{now.replace(':', '-')}"
 
     db.execute(
@@ -54,16 +53,24 @@ def finish_run(
     error: str | None = None,
 ) -> None:
     """Mark a run as completed or failed."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     status = "failed" if error else "completed"
 
     db.execute(
         """INSERT INTO journal (timestamp, action, details)
            VALUES (?, ?, ?)""",
-        (now, "run_finish", json.dumps({
-            "run_id": run_id, "status": status,
-            "summary": summary, "error": error,
-        })),
+        (
+            now,
+            "run_finish",
+            json.dumps(
+                {
+                    "run_id": run_id,
+                    "status": status,
+                    "summary": summary,
+                    "error": error,
+                }
+            ),
+        ),
     )
 
     db.execute(
@@ -88,7 +95,7 @@ def log_source_event(
     details: dict[str, Any] | None = None,
 ) -> None:
     """Log a source-level event (success, failure, evidence collected, etc.)."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     # Ensure source is registered
     db.execute(
@@ -152,11 +159,17 @@ def log_source_event(
     db.execute(
         """INSERT INTO journal (timestamp, action, details)
            VALUES (?, ?, ?)""",
-        (now, f"source_{event}", json.dumps({
-            "source_name": source_name,
-            "event": event,
-            "details": details or {},
-        })),
+        (
+            now,
+            f"source_{event}",
+            json.dumps(
+                {
+                    "source_name": source_name,
+                    "event": event,
+                    "details": details or {},
+                }
+            ),
+        ),
     )
 
     db.commit()
@@ -168,7 +181,7 @@ def journal_event(
     details: dict[str, Any] | None = None,
 ) -> None:
     """Write a journal entry."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     db.execute(
         """INSERT INTO journal (timestamp, action, details)
            VALUES (?, ?, ?)""",
@@ -181,9 +194,10 @@ def compute_input_fingerprint(db: sqlite3.Connection) -> str:
     """Compute a fingerprint of current input state for provenance."""
     # Hash of: registry row count + latest evidence hash + portfolio composition
     reg_count = db.execute("SELECT COUNT(*) FROM registry").fetchone()[0]
-    portfolio_items = db.execute(
-        "SELECT GROUP_CONCAT(isin ORDER BY isin) FROM portfolio_items"
-    ).fetchone()[0] or ""
+    portfolio_items = (
+        db.execute("SELECT GROUP_CONCAT(isin ORDER BY isin) FROM portfolio_items").fetchone()[0]
+        or ""
+    )
     latest_evidence = db.execute(
         "SELECT content_hash FROM evidence ORDER BY id DESC LIMIT 1"
     ).fetchone()

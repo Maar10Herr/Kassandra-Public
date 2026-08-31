@@ -1,12 +1,11 @@
 """Tests for dependency graph builder."""
 
-import sqlite3
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from kassandra.db import migrate, _connect
+from kassandra.db import _connect, migrate
 
 
 @pytest.fixture
@@ -36,8 +35,12 @@ class TestGraphInfrastructure:
             "INSERT INTO registry (canonical_name, lei, jurisdiction) VALUES (?, ?, ?)",
             ("SubCo", "LEI002", "DE"),
         )
-        parent_id = temp_db.execute("SELECT id FROM registry WHERE lei = ?", ("LEI001",)).fetchone()["id"]
-        sub_id = temp_db.execute("SELECT id FROM registry WHERE lei = ?", ("LEI002",)).fetchone()["id"]
+        parent_id = temp_db.execute(
+            "SELECT id FROM registry WHERE lei = ?", ("LEI001",)
+        ).fetchone()["id"]
+        sub_id = temp_db.execute("SELECT id FROM registry WHERE lei = ?", ("LEI002",)).fetchone()[
+            "id"
+        ]
 
         # Create evidence
         temp_db.execute(
@@ -95,8 +98,12 @@ class TestGraphInfrastructure:
         )
         temp_db.commit()
 
-        a_edges = temp_db.execute("SELECT COUNT(*) as c FROM edges WHERE source_registry_id = ?", (a_id,)).fetchone()
-        b_edges = temp_db.execute("SELECT COUNT(*) as c FROM edges WHERE source_registry_id = ?", (b_id,)).fetchone()
+        a_edges = temp_db.execute(
+            "SELECT COUNT(*) as c FROM edges WHERE source_registry_id = ?", (a_id,)
+        ).fetchone()
+        b_edges = temp_db.execute(
+            "SELECT COUNT(*) as c FROM edges WHERE source_registry_id = ?", (b_id,)
+        ).fetchone()
         assert a_edges["c"] == 1
         assert b_edges["c"] == 1
 

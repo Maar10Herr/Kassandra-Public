@@ -62,7 +62,6 @@ RELATIONSHIP_SHOCK_MAP: dict[str, list[str]] = {
         "reputational",
     ],
     "branch_of": ["ownership_control", "operational_shutdown"],
-
     # Economic dependency edges (from annual reports, TED, E-PRTR, etc.)
     "supplier_to": [
         "supplier_disruption",

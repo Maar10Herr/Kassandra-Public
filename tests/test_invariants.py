@@ -4,6 +4,7 @@ Uses in-memory databases to avoid mutating production state.
 """
 
 import sqlite3
+
 import pytest
 
 
@@ -77,17 +78,14 @@ def graph_db():
 class TestScoreableView:
     def test_excludes_economic_concepts(self, graph_db):
         count = graph_db.execute(
-            "SELECT COUNT(*) FROM scoreable_companies "
-            "WHERE company_type = 'economic_concept'"
+            "SELECT COUNT(*) FROM scoreable_companies WHERE company_type = 'economic_concept'"
         ).fetchone()[0]
         assert count == 0, (
             f"INVARIANT VIOLATION: {count} economic_concept rows in scoreable_companies"
         )
 
     def test_includes_all_portfolio_companies(self, graph_db):
-        count = graph_db.execute(
-            "SELECT COUNT(*) FROM scoreable_companies"
-        ).fetchone()[0]
+        count = graph_db.execute("SELECT COUNT(*) FROM scoreable_companies").fetchone()[0]
         assert count == 50, f"Expected 50 scoreable, got {count}"
 
     def test_economic_concepts_not_scored(self, graph_db):
@@ -99,9 +97,7 @@ class TestScoreableView:
 
     def test_view_is_stable_subset(self, graph_db):
         """Scoreable view should be subset of registry with domains."""
-        view_count = graph_db.execute(
-            "SELECT COUNT(*) FROM scoreable_companies"
-        ).fetchone()[0]
+        view_count = graph_db.execute("SELECT COUNT(*) FROM scoreable_companies").fetchone()[0]
         domain_count = graph_db.execute(
             "SELECT COUNT(*) FROM registry WHERE domain IS NOT NULL"
         ).fetchone()[0]

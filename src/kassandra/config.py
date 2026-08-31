@@ -6,7 +6,6 @@ checked-in YAML configuration.
 """
 
 import os
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +17,9 @@ class Config:
     """Kassandra configuration loaded from YAML + .env + environment overrides."""
 
     def __init__(self, config_path: Path | None = None):
-        self._config_path = config_path or Path(__file__).parent.parent.parent / "config" / "default.yaml"
+        self._config_path = (
+            config_path or Path(__file__).parent.parent.parent / "config" / "default.yaml"
+        )
         self._data: dict[str, Any] = {}
         self._load()
         self._load_env()
@@ -60,7 +61,9 @@ class Config:
 
     @property
     def api_requests_per_second(self) -> float:
-        return float(self._data.get("rates", {}).get("companies_house", {}).get("requests_per_second", 1.0))
+        return float(
+            self._data.get("rates", {}).get("companies_house", {}).get("requests_per_second", 1.0)
+        )
 
     @property
     def api_max_per_day(self) -> int:

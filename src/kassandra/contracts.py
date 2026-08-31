@@ -8,11 +8,11 @@ must adhere to.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
-
 # ── Evidence insertion result ─────────────────────────────────────────────────
+
 
 @dataclass
 class EvidenceResult:
@@ -30,6 +30,7 @@ class EvidenceResult:
 
 
 # ── Event insertion result ────────────────────────────────────────────────────
+
 
 @dataclass
 class EventResult:
@@ -122,6 +123,7 @@ class MatchResult:
 
 # ── Canonical collection metrics ──────────────────────────────────────────────
 
+
 @dataclass
 class CollectionMetrics:
     """Canonical per-source, per-run collection counters.
@@ -135,19 +137,19 @@ class CollectionMetrics:
     source_name: str
 
     # Document-level
-    discovered: int = 0       # total items the source reported as available
-    fetched: int = 0          # successfully retrieved (may be < discovered)
-    new_evidence: int = 0     # FIRST-SEEN evidence (not previously stored)
-    duplicates: int = 0       # evidence rows that already existed (by hash)
+    discovered: int = 0  # total items the source reported as available
+    fetched: int = 0  # successfully retrieved (may be < discovered)
+    new_evidence: int = 0  # FIRST-SEEN evidence (not previously stored)
+    duplicates: int = 0  # evidence rows that already existed (by hash)
 
     # Event-level
-    candidates: int = 0       # candidate events extracted/classified
-    unconfirmed: int = 0      # candidates persisted to unconfirmed_match_queue
-    events_created: int = 0   # newly inserted events
-    duplicate_events: int = 0 # events already present (inserted vs duplicate)
-    errors: int = 0           # fetch or parse failures
-    api_errors: int = 0       # transport/auth/block/unavailable failures
-    parse_failures: int = 0   # response/content parsing failures
+    candidates: int = 0  # candidate events extracted/classified
+    unconfirmed: int = 0  # candidates persisted to unconfirmed_match_queue
+    events_created: int = 0  # newly inserted events
+    duplicate_events: int = 0  # events already present (inserted vs duplicate)
+    errors: int = 0  # fetch or parse failures
+    api_errors: int = 0  # transport/auth/block/unavailable failures
+    parse_failures: int = 0  # response/content parsing failures
     error_type: str | None = None
     error_message: str | None = None
 
@@ -159,7 +161,9 @@ class CollectionMetrics:
         accounting identities are therefore evidence attempts and event results.
         """
         counters = self.to_dict()
-        negative = [name for name, value in counters.items() if isinstance(value, int) and value < 0]
+        negative = [
+            name for name, value in counters.items() if isinstance(value, int) and value < 0
+        ]
         if negative:
             raise ValueError(f"negative collection counters: {', '.join(negative)}")
         if self.fetched != self.new_evidence + self.duplicates:

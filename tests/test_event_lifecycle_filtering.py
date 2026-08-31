@@ -8,7 +8,7 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from kassandra.db import _connect, migrate
-from kassandra.evidence import store_evidence, store_event
+from kassandra.evidence import store_event, store_evidence
 
 
 def _db(tmp_path: Path) -> sqlite3.Connection:
@@ -27,12 +27,22 @@ def _db(tmp_path: Path) -> sqlite3.Connection:
 
 def _event(db, *, active: int, status: str, suffix: str):
     evidence = store_evidence(
-        db, f"event-{suffix}", f"https://example.test/{suffix}",
-        "2026-07-20T00:00:00Z", extraction_method="test", parser_version="1",
+        db,
+        f"event-{suffix}",
+        f"https://example.test/{suffix}",
+        "2026-07-20T00:00:00Z",
+        extraction_method="test",
+        parser_version="1",
     )
     result = store_event(
-        db, evidence.evidence_id, 1, "insolvency", severity="critical", confidence=0.99,
-        description=f"description-{suffix}", source_claims_directly=True,
+        db,
+        evidence.evidence_id,
+        1,
+        "insolvency",
+        severity="critical",
+        confidence=0.99,
+        description=f"description-{suffix}",
+        source_claims_directly=True,
     )
     db.execute(
         "UPDATE events SET active = ?, status = ?, extracted_at = ? WHERE id = ?",
@@ -61,7 +71,9 @@ def test_tombstoned_event_is_absent_from_transmission_lookup(tmp_path):
     from kassandra.scoring import _compute_transmission_signal
 
     db = _db(tmp_path)
-    db.execute("INSERT INTO registry (id, canonical_name, status) VALUES (2, 'SupplierCo', 'active')")
+    db.execute(
+        "INSERT INTO registry (id, canonical_name, status) VALUES (2, 'SupplierCo', 'active')"
+    )
     db.execute(
         "INSERT INTO evidence (id, content_hash, source_url, retrieval_time, extraction_method, parser_version) "
         "VALUES (1, 'edge-hash', 'https://example.test/edge', '2026-07-20T00:00:00Z', 'test', '1')"
@@ -74,12 +86,21 @@ def test_tombstoned_event_is_absent_from_transmission_lookup(tmp_path):
     )
     db.commit()
     _event_for_registry = store_evidence(
-        db, "supplier-event", "https://example.test/supplier", "2026-07-20T00:00:00Z",
-        extraction_method="test", parser_version="1",
+        db,
+        "supplier-event",
+        "https://example.test/supplier",
+        "2026-07-20T00:00:00Z",
+        extraction_method="test",
+        parser_version="1",
     )
     result = store_event(
-        db, _event_for_registry.evidence_id, 2, "insolvency",
-        severity="critical", confidence=0.99, description="dead",
+        db,
+        _event_for_registry.evidence_id,
+        2,
+        "insolvency",
+        severity="critical",
+        confidence=0.99,
+        description="dead",
     )
     db.execute("UPDATE events SET active=0, status='tombstoned' WHERE id=?", (result.event_id,))
     db.commit()

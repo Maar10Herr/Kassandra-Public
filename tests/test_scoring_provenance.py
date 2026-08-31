@@ -2,7 +2,7 @@
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -33,7 +33,9 @@ def _db() -> sqlite3.Connection:
     return db
 
 
-def _active_event(db: sqlite3.Connection, event_type: str, severity: str, confidence: float = 1.0) -> int:
+def _active_event(
+    db: sqlite3.Connection, event_type: str, severity: str, confidence: float = 1.0
+) -> int:
     evidence_id = db.execute(
         """INSERT INTO evidence
            (content_hash, source_url, retrieval_time, publication_time,
@@ -51,7 +53,7 @@ def _active_event(db: sqlite3.Connection, event_type: str, severity: str, confid
            (evidence_id, registry_id, event_type, severity, confidence,
             extracted_at, active, status)
            VALUES (?, 1, ?, ?, ?, ?, 1, 'active')""",
-        (evidence_id, event_type, severity, confidence, datetime.now(timezone.utc).isoformat()),
+        (evidence_id, event_type, severity, confidence, datetime.now(UTC).isoformat()),
     ).lastrowid
 
 
@@ -76,7 +78,9 @@ def test_manifest_is_deterministic_and_changes_for_active_input_only():
     first = _build_score_input_manifest(db, {"insolvency_event": 10.0})
     second = _build_score_input_manifest(db, {"insolvency_event": 10.0})
     assert first["fingerprint"] == second["fingerprint"]
-    assert json.dumps(first["manifest"], sort_keys=True) == json.dumps(second["manifest"], sort_keys=True)
+    assert json.dumps(first["manifest"], sort_keys=True) == json.dumps(
+        second["manifest"], sort_keys=True
+    )
 
     db.execute("UPDATE events SET active = 0, status = 'tombstoned' WHERE id = 1")
     db.commit()
@@ -90,10 +94,12 @@ def test_manifest_is_deterministic_and_changes_for_active_input_only():
 def test_changed_input_creates_snapshot_even_when_priority_is_unchanged():
     db = _db()
     compute_scores(db)
-    first = db.execute("SELECT analyst_priority, input_fingerprint FROM scores WHERE registry_id = 1").fetchone()
+    first = db.execute(
+        "SELECT analyst_priority, input_fingerprint FROM scores WHERE registry_id = 1"
+    ).fetchone()
 
     # Registry identity is a canonical scoring input; it changes provenance, not priority.
-    db.execute("UPDATE registry SET raw_json = '{\"source\": \"refreshed\"}' WHERE id = 1")
+    db.execute('UPDATE registry SET raw_json = \'{"source": "refreshed"}\' WHERE id = 1')
     db.commit()
     compute_scores(db)
     snapshots = db.execute(
@@ -101,7 +107,11 @@ def test_changed_input_creates_snapshot_even_when_priority_is_unchanged():
     ).fetchall()
 
     assert len(snapshots) == 2
-    assert snapshots[0]["analyst_priority"] == snapshots[1]["analyst_priority"] == first["analyst_priority"]
+    assert (
+        snapshots[0]["analyst_priority"]
+        == snapshots[1]["analyst_priority"]
+        == first["analyst_priority"]
+    )
     assert snapshots[0]["input_fingerprint"] != snapshots[1]["input_fingerprint"]
 
 
@@ -122,9 +132,7 @@ def test_source_run_freshness_is_grouped_once_and_entity_coverage_is_separate():
     db.set_trace_callback(statements.append)
     compute_scores(db)
     db.set_trace_callback(None)
-    manifest = json.loads(
-        db.execute("SELECT provenance_json FROM scoring_runs").fetchone()[0]
-    )
+    manifest = json.loads(db.execute("SELECT provenance_json FROM scoring_runs").fetchone()[0])
 
     source_run_queries = [s for s in statements if "source_runs" in s.lower()]
     assert len(source_run_queries) == 1
@@ -149,9 +157,9 @@ def test_one_active_events_scan_per_compute_scores():
     # with no JOIN: "SELECT id, registry_id, event_type, severity, confidence, extracted_at"
     old_second_scan_sig = "SELECT id, registry_id, event_type, severity, confidence, extracted_at"
     active_event_queries = [
-        q for q in queries
-        if old_second_scan_sig in q
-        and "event_type NOT IN ('unconfirmed_review_candidate'" in q
+        q
+        for q in queries
+        if old_second_scan_sig in q and "event_type NOT IN ('unconfirmed_review_candidate'" in q
     ]
     # This specific pattern was the old second scan in compute_scores.
     # Now that compute_scores reuses manifest rows, it should not appear.
@@ -162,7 +170,8 @@ def test_one_active_events_scan_per_compute_scores():
 
     # The manifest builder still has ONE active-events scan (with JOIN).
     manifest_scans = [
-        q for q in queries
+        q
+        for q in queries
         if "FROM events e JOIN evidence ev" in q
         and "e.active = 1 AND e.status = 'active'" in q
         and "ORDER BY e.id" in q
@@ -221,9 +230,7 @@ def test_scoring_runs_idempotent_insert():
     compute_scores(db)
     compute_scores(db)
     runs = db.execute("SELECT * FROM scoring_runs").fetchall()
-    assert len(runs) == 1, (
-        f"INSERT OR IGNORE should yield 1 row, got {len(runs)}"
-    )
+    assert len(runs) == 1, f"INSERT OR IGNORE should yield 1 row, got {len(runs)}"
 
 
 def test_repeated_identical_runs_same_run_id():
@@ -255,6 +262,7 @@ def test_changed_input_changes_run_id():
     compute_scores(db)
     runs = db.execute("SELECT run_id FROM scoring_runs ORDER BY created_at").fetchall()
     assert len(runs) == 2
+    assert runs[0]["run_id"] == run1
     assert runs[0]["run_id"] != runs[1]["run_id"], (
         "Changed inputs must produce a different deterministic run_id"
     )
@@ -265,6 +273,7 @@ def test_trigger_rejects_orphan_run_id_insert():
     db = _db()
     # Try inserting a score referencing a non-existent scoring_runs row
     import pytest
+
     with pytest.raises(sqlite3.IntegrityError, match="provenance integrity"):
         db.execute("""
             INSERT INTO scores
@@ -285,6 +294,7 @@ def test_trigger_rejects_orphan_run_id_update():
     assert score is not None
 
     import pytest
+
     with pytest.raises(sqlite3.IntegrityError, match="provenance integrity"):
         db.execute(
             "UPDATE scores SET run_id = ? WHERE id = ?",
@@ -332,7 +342,7 @@ def _db_with_legacy_scores():
     db = sqlite3.connect(":memory:")
     db.row_factory = sqlite3.Row
     # Manually run migrations 1-17 without migration 18 (which creates triggers)
-    from kassandra.db import MIGRATIONS, _reconcile_runtime_schema
+    from kassandra.db import MIGRATIONS
 
     db.execute("""CREATE TABLE IF NOT EXISTS schema_version (
         version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))""")
@@ -380,6 +390,7 @@ def test_migration_18_backfills_historical_provenance():
 
     # Force the migration 18 backfill
     from kassandra.db import _migrate_18_scoring_provenance
+
     _migrate_18_scoring_provenance(db)
     db.commit()
 
@@ -413,7 +424,9 @@ def test_migration_18_conflict_same_run_id_different_provenance():
     db.commit()
 
     import pytest
+
     from kassandra.db import _migrate_18_scoring_provenance
+
     with pytest.raises(sqlite3.IntegrityError, match="incompatible provenance"):
         _migrate_18_scoring_provenance(db)
 
@@ -439,7 +452,9 @@ def test_migration_18_conflict_same_fingerprint_different_run_ids():
     db.commit()
 
     import pytest
+
     from kassandra.db import _migrate_18_scoring_provenance
+
     with pytest.raises(sqlite3.IntegrityError, match="two different run_ids"):
         _migrate_18_scoring_provenance(db)
 
@@ -458,6 +473,7 @@ def test_migration_18_missing_fingerprint_creates_legacy_record():
     db.commit()
 
     from kassandra.db import _migrate_18_scoring_provenance
+
     _migrate_18_scoring_provenance(db)
     db.commit()
 
@@ -468,7 +484,9 @@ def test_migration_18_missing_fingerprint_creates_legacy_record():
     assert "unknown" in runs[0]["scorer_version"]
 
     # Score row must now reference the synthetic scoring_runs row
-    score = db.execute("SELECT run_id, input_fingerprint, scorer_version FROM scores WHERE id = 1").fetchone()
+    score = db.execute(
+        "SELECT run_id, input_fingerprint, scorer_version FROM scores WHERE id = 1"
+    ).fetchone()
     assert score["run_id"] == runs[0]["run_id"], "Score must reference synthetic run_id"
     assert score["input_fingerprint"] == runs[0]["input_fingerprint"]
     assert score["scorer_version"] == runs[0]["scorer_version"]
@@ -538,6 +556,7 @@ def test_migration_18_atomic_rollback_on_conflict():
     db.commit()
 
     import pytest
+
     with pytest.raises(sqlite3.IntegrityError, match="incompatible provenance"):
         migrate(db)
 
@@ -546,8 +565,7 @@ def test_migration_18_atomic_rollback_on_conflict():
 
     assert db.execute("SELECT COUNT(*) FROM scores").fetchone()[0] == 2
 
-    triggers = {row[0] for row in db.execute(
-        "SELECT name FROM sqlite_master WHERE type='trigger'")}
+    triggers = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert "trg_scores_validate_run_id_insert" not in triggers
     assert "trg_scores_validate_run_id_update" not in triggers
 
@@ -573,6 +591,7 @@ def test_migration_18_rerun_after_fix_succeeds():
     db.commit()
 
     import pytest
+
     with pytest.raises(sqlite3.IntegrityError):
         migrate(db)
     assert db.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 17
@@ -604,6 +623,7 @@ def test_migration_18_clears_provenance_json():
     db.commit()
 
     from kassandra.db import _migrate_18_scoring_provenance
+
     _migrate_18_scoring_provenance(db)
     db.commit()
 
@@ -640,14 +660,19 @@ def test_migration_18_multiple_missing_metadata_updates_score_refs():
     db.commit()
 
     from kassandra.db import _migrate_18_scoring_provenance
+
     _migrate_18_scoring_provenance(db)
     db.commit()
 
-    runs = db.execute("SELECT run_id, input_fingerprint, scorer_version FROM scoring_runs ORDER BY run_id").fetchall()
+    runs = db.execute(
+        "SELECT run_id, input_fingerprint, scorer_version FROM scoring_runs ORDER BY run_id"
+    ).fetchall()
     assert len(runs) == 2
     assert runs[0]["run_id"] != runs[1]["run_id"], "Each legacy score gets its own scoring_runs row"
 
-    scores = db.execute("SELECT id, run_id, input_fingerprint, scorer_version FROM scores ORDER BY id").fetchall()
+    scores = db.execute(
+        "SELECT id, run_id, input_fingerprint, scorer_version FROM scores ORDER BY id"
+    ).fetchall()
     for score in scores:
         assert score["run_id"].startswith("legacy-")
         assert score["input_fingerprint"] is not None
@@ -682,7 +707,9 @@ def test_migration_18_same_keys_differing_provenance_fails():
     db.commit()
 
     import pytest
+
     from kassandra.db import _migrate_18_scoring_provenance
+
     with pytest.raises(sqlite3.IntegrityError, match="incompatible provenance_json"):
         _migrate_18_scoring_provenance(db)
 
@@ -707,7 +734,9 @@ def test_migration_18_preexisting_scoring_runs_different_fingerprint_fails():
     db.commit()
 
     import pytest
+
     from kassandra.db import _migrate_18_scoring_provenance
+
     with pytest.raises(sqlite3.IntegrityError, match="different fingerprint"):
         _migrate_18_scoring_provenance(db)
 
@@ -732,7 +761,9 @@ def test_migration_18_preexisting_scoring_runs_different_provenance_fails():
     db.commit()
 
     import pytest
+
     from kassandra.db import _migrate_18_scoring_provenance
+
     with pytest.raises(sqlite3.IntegrityError, match="different provenance_json"):
         _migrate_18_scoring_provenance(db)
 
@@ -757,7 +788,9 @@ def test_migration_18_preexisting_same_fpsv_different_rid_fails():
     db.commit()
 
     import pytest
+
     from kassandra.db import _migrate_18_scoring_provenance
+
     with pytest.raises(sqlite3.IntegrityError, match="existing run_id"):
         _migrate_18_scoring_provenance(db)
 
@@ -776,11 +809,16 @@ def test_repair_scoring_runs_shape_rejects_duplicate_run_ids():
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    db.execute("INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('dup-1', 'fp-a', 'v1')")
-    db.execute("INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('dup-1', 'fp-b', 'v2')")
+    db.execute(
+        "INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('dup-1', 'fp-a', 'v1')"
+    )
+    db.execute(
+        "INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('dup-1', 'fp-b', 'v2')"
+    )
     db.commit()
 
     from kassandra.db import _repair_scoring_runs_shape
+
     with pytest.raises(sqlite3.IntegrityError, match="duplicate run_id"):
         _repair_scoring_runs_shape(db)
 
@@ -799,11 +837,16 @@ def test_repair_scoring_runs_shape_rejects_duplicate_fingerprint_version():
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    db.execute("INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('r1', 'fp-dup', 'v1')")
-    db.execute("INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('r2', 'fp-dup', 'v1')")
+    db.execute(
+        "INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('r1', 'fp-dup', 'v1')"
+    )
+    db.execute(
+        "INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES ('r2', 'fp-dup', 'v1')"
+    )
     db.commit()
 
     from kassandra.db import _repair_scoring_runs_shape
+
     with pytest.raises(sqlite3.IntegrityError, match="duplicate.*fingerprint"):
         _repair_scoring_runs_shape(db)
 
@@ -822,9 +865,12 @@ def test_repair_scoring_runs_shape_rejects_null_run_id():
             created_at TEXT NOT NULL DEFAULT (datetime('now'))
         )
     """)
-    db.execute("INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES (NULL, 'fp-a', 'v1')")
+    db.execute(
+        "INSERT INTO scoring_runs (run_id, input_fingerprint, scorer_version) VALUES (NULL, 'fp-a', 'v1')"
+    )
     db.commit()
 
     from kassandra.db import _repair_scoring_runs_shape
+
     with pytest.raises(sqlite3.IntegrityError, match="NULL run_id"):
         _repair_scoring_runs_shape(db)

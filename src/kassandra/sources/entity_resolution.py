@@ -3,14 +3,12 @@
 The source adapters may discover candidates, but only this exact-name/official-ID
 contract may authorize an event. Queue storage is canonical and migration-owned.
 """
+
 from __future__ import annotations
 
 import re
 import unicodedata
-from datetime import datetime, timezone
-
-from kassandra.contracts import MatchResult
-
+from datetime import UTC, datetime
 
 # Canonical jurisdiction to country mapping
 _JURISDICTION_CANONICAL: dict[str, str] = {
@@ -74,10 +72,17 @@ def discovery_overlap(company_name: str, notice_text: str, suffixes: set[str]) -
 
 
 def queue_unconfirmed_match(
-    db, *, source_name: str, source_entity_name: str,
-    candidate_registry_id: int | None, candidate_registry_name: str | None,
-    match_type: str, match_confidence: float, evidence_id: int | None,
-    evidence_excerpt: str | None, reason: str,
+    db,
+    *,
+    source_name: str,
+    source_entity_name: str,
+    candidate_registry_id: int | None,
+    candidate_registry_name: str | None,
+    match_type: str,
+    match_confidence: float,
+    evidence_id: int | None,
+    evidence_excerpt: str | None,
+    reason: str,
 ) -> bool:
     """Insert a pending queue item and return whether a new row was created."""
     try:
@@ -86,14 +91,24 @@ def queue_unconfirmed_match(
         raise RuntimeError(
             "unconfirmed_match_queue is missing; apply canonical database migrations before collecting"
         ) from exc
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     cursor = db.execute(
         """INSERT OR IGNORE INTO unconfirmed_match_queue
         (source_name, source_entity_name, candidate_registry_id, candidate_registry_name,
          match_type, match_confidence, evidence_id, evidence_excerpt, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
-        (source_name, source_entity_name, candidate_registry_id, candidate_registry_name,
-         match_type, match_confidence, evidence_id, (evidence_excerpt or reason)[:2000], now, now),
+        (
+            source_name,
+            source_entity_name,
+            candidate_registry_id,
+            candidate_registry_name,
+            match_type,
+            match_confidence,
+            evidence_id,
+            (evidence_excerpt or reason)[:2000],
+            now,
+            now,
+        ),
     )
     db.commit()
     return cursor.rowcount == 1

@@ -11,12 +11,12 @@ Covers:
 import os
 import sqlite3
 import tempfile
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-from datetime import datetime, timezone, timedelta
-
+from unittest.mock import patch
 
 # ── Overlap lock ──────────────────────────────────────────────────────────────
+
 
 def _lock_path() -> Path:
     return Path(tempfile.gettempdir()) / "kassandra_soak_cycle.lock"
@@ -24,6 +24,7 @@ def _lock_path() -> Path:
 
 def test_acquire_lock_first_time_succeeds():
     from kassandra.soak import _acquire_cycle_lock, _release_cycle_lock
+
     p = _lock_path()
     if p.exists():
         p.unlink()
@@ -35,6 +36,7 @@ def test_acquire_lock_first_time_succeeds():
 
 def test_acquire_lock_rejects_second_caller():
     from kassandra.soak import _acquire_cycle_lock, _release_cycle_lock
+
     p = _lock_path()
     if p.exists():
         p.unlink()
@@ -45,6 +47,7 @@ def test_acquire_lock_rejects_second_caller():
 
 def test_lock_released_on_success():
     from kassandra.soak import _acquire_cycle_lock, _release_cycle_lock
+
     p = _lock_path()
     if p.exists():
         p.unlink()
@@ -55,6 +58,7 @@ def test_lock_released_on_success():
 
 def test_lock_released_on_exception():
     from kassandra.soak import _acquire_cycle_lock, _release_cycle_lock
+
     p = _lock_path()
     if p.exists():
         p.unlink()
@@ -68,8 +72,10 @@ def test_lock_released_on_exception():
 
 # ── Web monitor supervision ───────────────────────────────────────────────────
 
+
 def test_web_monitor_singleton_lock():
-    from kassandra.soak import _weblock_path, _dispatch_web_monitor
+    from kassandra.soak import _dispatch_web_monitor, _weblock_path
+
     p = _weblock_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(str(os.getpid()))
@@ -78,7 +84,8 @@ def test_web_monitor_singleton_lock():
 
 
 def test_web_monitor_dispatches_when_no_lock():
-    from kassandra.soak import _weblock_path, _dispatch_web_monitor
+    from kassandra.soak import _dispatch_web_monitor, _weblock_path
+
     p = _weblock_path()
     if p.exists():
         p.unlink()
@@ -91,18 +98,21 @@ def test_web_monitor_dispatches_when_no_lock():
 
 def test_web_monitor_command_is_valid_python():
     from kassandra.soak import _build_web_monitor_command
+
     script = _build_web_monitor_command()[2]
     compile(script, "<kassandra-web-monitor-child>", "exec")
 
 
 def test_web_monitor_command_has_lock_handling():
     from kassandra.soak import _build_web_monitor_command
+
     cmd = _build_web_monitor_command()
     assert any("WEBLOCK_PATH" in part for part in cmd)
 
 
 def test_web_monitor_lock_cleanup_on_completion():
-    from kassandra.soak import _weblock_path, _web_monitor_lock_script
+    from kassandra.soak import _web_monitor_lock_script
+
     script = _web_monitor_lock_script()
     assert "os.unlink" in script or "unlink" in script
     assert "WEBLOCK_PATH" in script
@@ -130,6 +140,7 @@ class _FakeWebProcess:
 
 def test_web_monitor_supervision_observes_success_and_output():
     from kassandra.soak import _dispatch_web_monitor
+
     child = _FakeWebProcess()
     with patch("subprocess.Popen", return_value=child):
         result = _dispatch_web_monitor(timeout_seconds=1)
@@ -141,6 +152,7 @@ def test_web_monitor_supervision_observes_success_and_output():
 
 def test_web_monitor_supervision_reports_nonzero_exit():
     from kassandra.soak import _dispatch_web_monitor
+
     child = _FakeWebProcess(returncode=7)
     with patch("subprocess.Popen", return_value=child):
         result = _dispatch_web_monitor(timeout_seconds=1)
@@ -151,6 +163,7 @@ def test_web_monitor_supervision_reports_nonzero_exit():
 
 def test_web_monitor_failure_persists_structured_diagnostic():
     import json
+
     from kassandra.soak import _dispatch_web_monitor, _weblock_path
 
     lock = _weblock_path()
@@ -171,13 +184,15 @@ def test_web_monitor_failure_persists_structured_diagnostic():
     assert isinstance(result, dict)
     assert result["status"] == "failed"
     assert detail == {
-        "type": "failed", "exit_code": 7,
+        "type": "failed",
+        "exit_code": 7,
         "message": "SyntaxError: invalid child",
     }
 
 
 def test_web_monitor_supervision_kills_timeout_and_reports_it():
     from kassandra.soak import _dispatch_web_monitor
+
     child = _FakeWebProcess(timeout=True)
     with patch("subprocess.Popen", return_value=child):
         result = _dispatch_web_monitor(timeout_seconds=1)
@@ -187,10 +202,14 @@ def test_web_monitor_supervision_kills_timeout_and_reports_it():
 
 def test_web_monitor_freshness_rejects_stale_latest_success():
     from kassandra.soak import evaluate_source_freshness
+
     db = _make_test_db()
-    now = datetime(2026, 7, 16, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 16, tzinfo=UTC)
     old = (now - timedelta(hours=27)).isoformat()
-    db.execute("INSERT INTO source_runs (source_name, completed_at, status) VALUES ('web_monitor', ?, 'success')", (old,))
+    db.execute(
+        "INSERT INTO source_runs (source_name, completed_at, status) VALUES ('web_monitor', ?, 'success')",
+        (old,),
+    )
     db.commit()
     result = evaluate_source_freshness(db, now=now, sla_hours=26)
     assert result["web_monitor"]["healthy"] is False
@@ -199,12 +218,17 @@ def test_web_monitor_freshness_rejects_stale_latest_success():
 
 def test_web_monitor_freshness_has_no_historical_only_green_state():
     from kassandra.soak import evaluate_source_freshness
+
     db = _make_test_db()
-    now = datetime(2026, 7, 16, tzinfo=timezone.utc)
-    db.execute("INSERT INTO source_runs (source_name, completed_at, status) VALUES ('web_monitor', ?, 'success')",
-               ((now - timedelta(hours=48)).isoformat(),))
-    db.execute("INSERT INTO source_runs (source_name, completed_at, status) VALUES ('web_monitor', ?, 'failed')",
-               ((now - timedelta(hours=1)).isoformat(),))
+    now = datetime(2026, 7, 16, tzinfo=UTC)
+    db.execute(
+        "INSERT INTO source_runs (source_name, completed_at, status) VALUES ('web_monitor', ?, 'success')",
+        ((now - timedelta(hours=48)).isoformat(),),
+    )
+    db.execute(
+        "INSERT INTO source_runs (source_name, completed_at, status) VALUES ('web_monitor', ?, 'failed')",
+        ((now - timedelta(hours=1)).isoformat(),),
+    )
     db.commit()
     result = evaluate_source_freshness(db, now=now, sla_hours=26)
     assert result["web_monitor"]["healthy"] is False
@@ -213,14 +237,18 @@ def test_web_monitor_freshness_has_no_historical_only_green_state():
 
 # ── Failure recovery ──────────────────────────────────────────────────────────
 
+
 def test_failed_cycle_preserves_diagnostics(tmp_path):
     from kassandra.soak import load_soak_state, save_soak_state
+
     state_path = tmp_path / "soak.json"
     with patch("kassandra.soak.SOAK_STATE_PATH", state_path):
         state = load_soak_state()
         state["cycles_failed"] += 1
         state["last_failure_diagnostic"] = {
-            "step": "collect", "error": "Gazette 429", "at": "2026-06-19T08:00:00Z",
+            "step": "collect",
+            "error": "Gazette 429",
+            "at": "2026-06-19T08:00:00Z",
         }
         save_soak_state(state)
         state2 = load_soak_state()
@@ -231,6 +259,7 @@ def test_failed_cycle_preserves_diagnostics(tmp_path):
 
 def test_no_busy_loop_on_persistent_failure(tmp_path):
     from kassandra.soak import load_soak_state, save_soak_state
+
     state_path = tmp_path / "soak.json"
     with patch("kassandra.soak.SOAK_STATE_PATH", state_path):
         state = load_soak_state()
@@ -246,6 +275,7 @@ def test_no_busy_loop_on_persistent_failure(tmp_path):
 
 # ── Cron collision offset ────────────────────────────────────────────────────
 
+
 def test_weekly_cron_offset_from_daily():
     daily_hour, daily_minute = 8, 0
     weekly_hour, weekly_minute = 8, 5
@@ -255,9 +285,11 @@ def test_weekly_cron_offset_from_daily():
 
 # ── Digest reconciliation helpers ─────────────────────────────────────────────
 
+
 def _make_test_db() -> sqlite3.Connection:
     """Create an in-memory DB with schema for reconciliation testing."""
     import sqlite3 as _sqlite3
+
     db = _sqlite3.connect(":memory:")
     db.row_factory = _sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
@@ -326,19 +358,28 @@ def _make_test_db() -> sqlite3.Connection:
     """)
     for i in range(1, 4):
         db.execute("INSERT OR IGNORE INTO scoreable_companies (id) VALUES (?)", (i,))
-        db.execute("INSERT OR IGNORE INTO registry (id, canonical_name, status) VALUES (?, ?, ?)",
-                   (i, f"Company {i}", "active"))
-    db.execute("INSERT INTO registry (id, canonical_name, status) VALUES (4, 'SupplierCo', 'active')")
+        db.execute(
+            "INSERT OR IGNORE INTO registry (id, canonical_name, status) VALUES (?, ?, ?)",
+            (i, f"Company {i}", "active"),
+        )
+    db.execute(
+        "INSERT INTO registry (id, canonical_name, status) VALUES (4, 'SupplierCo', 'active')"
+    )
     for rid in range(1, 5):
-        db.execute("INSERT INTO scores (registry_id, analyst_priority, computed_at) VALUES (?, 0.1, '2026-06-19T00:00:00Z')", (rid,))
+        db.execute(
+            "INSERT INTO scores (registry_id, analyst_priority, computed_at) VALUES (?, 0.1, '2026-06-19T00:00:00Z')",
+            (rid,),
+        )
     db.commit()
     return db
 
 
 # ── Digest reconciliation tests ───────────────────────────────────────────────
 
+
 def test_portfolio_scored_matches_scoreable_companies():
     from kassandra.soak import collect_metrics
+
     db = _make_test_db()
     metrics = collect_metrics(db)
     db.close()
@@ -349,12 +390,17 @@ def test_portfolio_scored_matches_scoreable_companies():
 
 def test_evidence_this_cycle_uses_new_documents():
     from kassandra.soak import collect_metrics
+
     db = _make_test_db()
     run_id = "test-run-001"
-    db.execute("INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 10, 3, 'now', 'now')",
-               (run_id, "companies_house"))
-    db.execute("INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 40, 2, 'now', 'now')",
-               (run_id, "uk_gazette"))
+    db.execute(
+        "INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 10, 3, 'now', 'now')",
+        (run_id, "companies_house"),
+    )
+    db.execute(
+        "INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 40, 2, 'now', 'now')",
+        (run_id, "uk_gazette"),
+    )
     db.commit()
     metrics = collect_metrics(db)
     db.close()
@@ -368,12 +414,23 @@ def test_evidence_this_cycle_uses_new_documents():
 
 def test_events_by_source_joins_evidence():
     from kassandra.soak import collect_metrics
+
     db = _make_test_db()
-    db.execute("INSERT INTO evidence (id, content_hash, source_url, retrieval_time, extraction_method) VALUES (1, 'h1', 'u1', 'now', 'uk_gazette_feed')")
-    db.execute("INSERT INTO evidence (id, content_hash, source_url, retrieval_time, extraction_method) VALUES (2, 'h2', 'u2', 'now', 'companies_house_api')")
-    db.execute("INSERT INTO events (evidence_id, registry_id, event_type) VALUES (1, 1, 'insolvency')")
-    db.execute("INSERT INTO events (evidence_id, registry_id, event_type) VALUES (1, 1, 'restructuring')")
-    db.execute("INSERT INTO events (evidence_id, registry_id, event_type) VALUES (2, 2, 'management_departure')")
+    db.execute(
+        "INSERT INTO evidence (id, content_hash, source_url, retrieval_time, extraction_method) VALUES (1, 'h1', 'u1', 'now', 'uk_gazette_feed')"
+    )
+    db.execute(
+        "INSERT INTO evidence (id, content_hash, source_url, retrieval_time, extraction_method) VALUES (2, 'h2', 'u2', 'now', 'companies_house_api')"
+    )
+    db.execute(
+        "INSERT INTO events (evidence_id, registry_id, event_type) VALUES (1, 1, 'insolvency')"
+    )
+    db.execute(
+        "INSERT INTO events (evidence_id, registry_id, event_type) VALUES (1, 1, 'restructuring')"
+    )
+    db.execute(
+        "INSERT INTO events (evidence_id, registry_id, event_type) VALUES (2, 2, 'management_departure')"
+    )
     db.commit()
     metrics = collect_metrics(db)
     db.close()
@@ -384,6 +441,7 @@ def test_events_by_source_joins_evidence():
 
 def test_resource_has_process_metrics():
     from kassandra.soak import _collect_resource
+
     r = _collect_resource()
     assert "process_rss_mb" in r
     assert "memory_pressure" in r
@@ -395,6 +453,7 @@ def test_resource_has_process_metrics():
 
 def test_gleif_staleness_detects_overdue():
     from kassandra.soak import _get_gleif_staleness
+
     db = _make_test_db()
     state = _get_gleif_staleness(db)
     db.close()
@@ -404,12 +463,17 @@ def test_gleif_staleness_detects_overdue():
 
 def test_source_run_reconciliation_finds_bad_rows():
     from kassandra.soak import run_consistency_checks
+
     db = _make_test_db()
     run_id = "test-recon"
-    db.execute("INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 10, 3, 'now', 'now')",
-               (run_id, "ok_source"))
-    db.execute("INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 2, 10, 'now', 'now')",
-               (run_id, "bad_source"))
+    db.execute(
+        "INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 10, 3, 'now', 'now')",
+        (run_id, "ok_source"),
+    )
+    db.execute(
+        "INSERT INTO source_runs (run_id, source_name, documents_discovered, new_documents, started_at, completed_at) VALUES (?, ?, 2, 10, 'now', 'now')",
+        (run_id, "bad_source"),
+    )
     db.commit()
     checks = run_consistency_checks(db)
     db.close()
@@ -423,7 +487,9 @@ def test_scheduled_sources_match_actual_automated_collectors():
 
     assert "handelsregister_de" not in SCHEDULED_SOURCES
     assert "handelsregister_de" in MANUAL_ONLY_SOURCES
-    assert {"companies_house", "uk_gazette", "web_monitor", "bodacc_fr", "borme_es"} <= set(SCHEDULED_SOURCES)
+    assert {"companies_house", "uk_gazette", "web_monitor", "bodacc_fr", "borme_es"} <= set(
+        SCHEDULED_SOURCES
+    )
 
 
 def test_semantic_checks_flag_stale_queue_and_unaccounted_candidates():
@@ -445,9 +511,7 @@ def test_semantic_checks_flag_stale_queue_and_unaccounted_candidates():
         VALUES ('bad', 'bodacc_fr', 1, 1, 1, 0, '2026-07-16T00:00:00+00:00');
     """)
 
-    findings = run_semantic_health_checks(
-        db, now=datetime(2026, 7, 16, tzinfo=timezone.utc)
-    )
+    findings = run_semantic_health_checks(db, now=datetime(2026, 7, 16, tzinfo=UTC))
     checks = {finding["check"] for finding in findings}
 
     assert "stale_unconfirmed_matches" in checks
@@ -458,8 +522,12 @@ def test_source_metric_state_stores_snapshot_and_period_delta():
     from kassandra.soak import update_source_metric_state
 
     state = {}
-    update_source_metric_state(state, {"bodacc_fr": {"runs": 10, "new_evidence": 20, "api_errors": 2}})
-    update_source_metric_state(state, {"bodacc_fr": {"runs": 12, "new_evidence": 23, "api_errors": 2}})
+    update_source_metric_state(
+        state, {"bodacc_fr": {"runs": 10, "new_evidence": 20, "api_errors": 2}}
+    )
+    update_source_metric_state(
+        state, {"bodacc_fr": {"runs": 12, "new_evidence": 23, "api_errors": 2}}
+    )
 
     metric = state["source_metrics"]["bodacc_fr"]
     assert metric["all_time"]["runs"] == 12
@@ -467,35 +535,49 @@ def test_source_metric_state_stores_snapshot_and_period_delta():
     assert metric["period_delta"]["new_evidence"] == 3
     assert metric["period_delta"]["api_errors"] == 0
 
+
 # ── Digest regression tests (Round 5: engineering audit acceptance criteria) ────────────
+
 
 def test_digest_no_unknown_transmission_items():
     """After enrichment, watchlist items must have real entity names.
     The production digest was showing 'Unknown has unknown' — this guards against regression."""
     from kassandra.soak import collect_metrics
+
     db = _make_test_db()
     # Add a score with direct adverse signal for company 1
-    db.execute("UPDATE scores SET active_watch_priority=0.02, transmission_signal_score=0, priority_reason='adverse_signal', observation_severity=0.2 WHERE registry_id=1")
-    db.execute("INSERT OR REPLACE INTO events (id, registry_id, event_type, severity, confidence, extracted_at, evidence_id) VALUES (1, 1, 'profit_warning', 'medium', 0.90, '2026-06-19', 1)")
-    db.execute("INSERT OR IGNORE INTO evidence (id, content_hash, extraction_method, source_url, source_reliability, fetched_at, retrieval_time) VALUES (1, 'abc', 'companies_house', 'http://x', 0.9, '2026-06-19', '2026-06-19')")
+    db.execute(
+        "UPDATE scores SET active_watch_priority=0.02, transmission_signal_score=0, priority_reason='adverse_signal', observation_severity=0.2 WHERE registry_id=1"
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO events (id, registry_id, event_type, severity, confidence, extracted_at, evidence_id) VALUES (1, 1, 'profit_warning', 'medium', 0.90, '2026-06-19', 1)"
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO evidence (id, content_hash, extraction_method, source_url, source_reliability, fetched_at, retrieval_time) VALUES (1, 'abc', 'companies_house', 'http://x', 0.9, '2026-06-19', '2026-06-19')"
+    )
     db.commit()
     m = collect_metrics(db)
     db.close()
-    watchlist = m.get('scores', {}).get('active_watchlist', [])
+    watchlist = m.get("scores", {}).get("active_watchlist", [])
     assert len(watchlist) >= 1, f"Should have watchlist items: {watchlist}"
     for item in watchlist:
-        trigger = item.get('trigger_event_type', '')
-        entity = item.get('trigger_entity', '')
-        assert trigger not in ('', 'unknown'), f"Item missing trigger event type: {item}"
-        assert entity != 'Unknown', f"Item has Unknown entity: {item}"
+        trigger = item.get("trigger_event_type", "")
+        entity = item.get("trigger_entity", "")
+        assert trigger not in ("", "unknown"), f"Item missing trigger event type: {item}"
+        assert entity != "Unknown", f"Item has Unknown entity: {item}"
 
 
 def test_digest_direct_item_has_trigger_details():
     """Direct adverse items must show event type, severity, confidence, evidence IDs."""
     from kassandra.soak import collect_metrics
+
     db = _make_test_db()
-    db.execute("INSERT OR REPLACE INTO registry (id, canonical_name, status) VALUES (1, 'DirectCo', 'ISSUED')")
-    db.execute("INSERT OR REPLACE INTO scoreable_companies (id, canonical_name) VALUES (1, 'DirectCo')")
+    db.execute(
+        "INSERT OR REPLACE INTO registry (id, canonical_name, status) VALUES (1, 'DirectCo', 'ISSUED')"
+    )
+    db.execute(
+        "INSERT OR REPLACE INTO scoreable_companies (id, canonical_name) VALUES (1, 'DirectCo')"
+    )
     db.execute("""
         INSERT OR REPLACE INTO events (id, registry_id, event_type, severity, confidence,
                             description, extracted_at, evidence_id)
@@ -524,12 +606,13 @@ def test_digest_direct_item_has_trigger_details():
     db.commit()
     m = collect_metrics(db)
     db.close()
-    watchlist = m.get('scores', {}).get('active_watchlist', [])
-    direct = [i for i in watchlist if i.get('_is_direct')]
+    watchlist = m.get("scores", {}).get("active_watchlist", [])
+    direct = [i for i in watchlist if i.get("_is_direct")]
     assert len(direct) >= 1, f"Should have direct items: {watchlist}"
     item = direct[0]
-    assert item.get('trigger_event_type') not in (None, '', 'unknown'), \
+    assert item.get("trigger_event_type") not in (None, "", "unknown"), (
         f"Direct item missing trigger event type: {item}"
-    assert item.get('evidence_ids', ''), f"Direct item missing evidence IDs: {item}"
-    assert item.get('trigger_description'), f"Direct item missing trigger description: {item}"
-    assert item.get('trigger_source_url'), f"Direct item missing source URL: {item}"
+    )
+    assert item.get("evidence_ids", ""), f"Direct item missing evidence IDs: {item}"
+    assert item.get("trigger_description"), f"Direct item missing trigger description: {item}"
+    assert item.get("trigger_source_url"), f"Direct item missing source URL: {item}"

@@ -27,17 +27,26 @@ Extraction targets per annual report sections:
 import logging
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import fitz  # PyMuPDF
+import httpx
 
 from kassandra.evidence import store_evidence
+from kassandra.http_security import (
+    URLSafetyError,
+    safe_get,
+    validate_public_http_url,
+)
 from kassandra.shock_channel import populate_edge_attributes
 
 logger = logging.getLogger(__name__)
+
+MAX_ANNUAL_REPORT_BYTES = 64 * 1024 * 1024
+MAX_DISCOVERY_HTML_BYTES = 2 * 1024 * 1024
 
 # ── Dependency extraction patterns ──────────────────────────────────────────
 # Each pattern: (dependency_type, relationship, pattern_id, regex_list)
@@ -46,99 +55,176 @@ logger = logging.getLogger(__name__)
 
 CUSTOMER_PATTERNS: list[tuple[str, str, list[str]]] = [
     # (relationship, pattern_id, [regexes])
-    ("named_customer", "CUST001", [
-        # "TSMC, Samsung, and Intel are our largest customers"
-        r"\b([A-Z][A-Za-z\s&.,]{4,80})\s+(?:is|are|remain(?:s|ed)?)\s+(?:our\s+)?(?:largest|biggest|single\s+largest|major|key|important|significant)\s+customers?\b",
-        # "our major customers include TSMC, Samsung and Intel"
-        r"\b(?:our\s+)?(?:major|key|largest|biggest|important)\s+customers?\s+(?:include|are|comprise)\s+([A-Z][A-Za-z\s&.,]{4,120})\b",
-        # "sales to TSMC, our largest customer"
-        r"\bsales?\s+(?:to|with)\s+([A-Z][A-Za-z\s&.,]{4,50})(?:,?\s+(?:our|a|the)\s+(?:largest|biggest|major|key)\s+customer)\b",
-    ]),
-    ("customer_concentration", "CUST002", [
-        r"\b(?:top|largest)\s+(?:3|5|10|three|five|ten)\s+(?:customers?|clients?)\s+(?:account|represent)\s+",
-        r"\bno\s+(?:single|customer|client)\s+(?:accounts\s+for|represents|exceeds)\s+(?:more\s+than\s+)?(\d{1,2})%\s+of\s+(?:revenue|sales|turnover)\b",
-        r"\b(?:customer|client)\s+concentration\b[^.]*?\b(\d{1,2})%\b",
-    ]),
-    ("customer_relationship", "CUST003", [
-        r"\b(?:customer|client)\s+(?:relationship|partnership|agreement|contract)\s+with\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
-        r"\b([A-Z][A-Za-z\s&.,]{4,50})\s+(?:is|as)\s+(?:a|our)\s+(?:major|key|important|significant|largest)\s+(?:customer|client)\b",
-    ]),
+    (
+        "named_customer",
+        "CUST001",
+        [
+            # "TSMC, Samsung, and Intel are our largest customers"
+            r"\b([A-Z][A-Za-z\s&.,]{4,80})\s+(?:is|are|remain(?:s|ed)?)\s+(?:our\s+)?(?:largest|biggest|single\s+largest|major|key|important|significant)\s+customers?\b",
+            # "our major customers include TSMC, Samsung and Intel"
+            r"\b(?:our\s+)?(?:major|key|largest|biggest|important)\s+customers?\s+(?:include|are|comprise)\s+([A-Z][A-Za-z\s&.,]{4,120})\b",
+            # "sales to TSMC, our largest customer"
+            r"\bsales?\s+(?:to|with)\s+([A-Z][A-Za-z\s&.,]{4,50})(?:,?\s+(?:our|a|the)\s+(?:largest|biggest|major|key)\s+customer)\b",
+        ],
+    ),
+    (
+        "customer_concentration",
+        "CUST002",
+        [
+            r"\b(?:top|largest)\s+(?:3|5|10|three|five|ten)\s+(?:customers?|clients?)\s+(?:account|represent)\s+",
+            r"\bno\s+(?:single|customer|client)\s+(?:accounts\s+for|represents|exceeds)\s+(?:more\s+than\s+)?(\d{1,2})%\s+of\s+(?:revenue|sales|turnover)\b",
+            r"\b(?:customer|client)\s+concentration\b[^.]*?\b(\d{1,2})%\b",
+        ],
+    ),
+    (
+        "customer_relationship",
+        "CUST003",
+        [
+            r"\b(?:customer|client)\s+(?:relationship|partnership|agreement|contract)\s+with\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
+            r"\b([A-Z][A-Za-z\s&.,]{4,50})\s+(?:is|as)\s+(?:a|our)\s+(?:major|key|important|significant|largest)\s+(?:customer|client)\b",
+        ],
+    ),
 ]
 
 SUPPLIER_PATTERNS: list[tuple[str, str, list[str]]] = [
-    ("sole_supplier", "SUPP001", [
-        r"\b(?:sole|single[-\s]source|exclusive)\s+suppli(?:er|es)\s+(?:of|for)\s+([A-Za-z\s&.,()]{4,80})\b",
-        r"\bdepend(?:s|ent|ence)\s+(?:on|upon)\s+(?:a\s+)?(?:single|sole)\s+suppli(?:er|es?)\s+(?:of|for)\s+([A-Za-z\s&.,()]{4,80})\b",
-        r"\bno\s+(?:viable|ready|immediate)\s+(?:alternative|substitute)\s+(?:supplier|source)\s+(?:for|of)\s+([A-Za-z\s&.,()]{4,80})\b",
-    ]),
-    ("key_supplier", "SUPP002", [
-        r"\b(?:key|critical|strategic|important)\s+suppli(?:er|es)\s+(?:include|are|of)\s+([A-Za-z\s&.,()]{4,80})\b",
-        r"\b(?:source|procure)\s+(?:our\s+)?([A-Za-z\s&.,()]{4,80})\s+from\s+(?:a\s+)?(?:key|critical|major|primary)\s+suppli(?:er|es)\b",
-        r"\b([A-Z][A-Za-z\s&.,]{4,50})\s+(?:is|are)\s+(?:our|a|the)\s+(?:primary|main|key|major)\s+suppli(?:er|es)\s+(?:of|for)\b",
-    ]),
-    ("supplier_concentration", "SUPP003", [
-        r"\b(?:top|largest)\s+(?:3|5|10|three|five|ten)\s+(?:suppliers?|vendors?)\s+(?:account|represent)\s+",
-        r"\bsuppli(?:er|ers)\s+concentration\b[^.]*?\b(\d{1,2})%\b",
-        r"\braw\s+materials?\s+(?:are\s+)?(?:source|procure)d?\s+(?:from|through)\s+([A-Za-z\s&.,()]{4,80})\b",
-    ]),
-    ("named_supplier", "SUPP004", [
-        r"\b(?:purchase|buy|acquire|obtain)\s+(?:our\s+)?(?:components?|materials?|parts?|modules?|inputs?)\s+from\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
-        r"\b(?:supply|procurement)\s+(?:agreement|contract|relationship|arrangement)\s+with\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
-    ]),
+    (
+        "sole_supplier",
+        "SUPP001",
+        [
+            r"\b(?:sole|single[-\s]source|exclusive)\s+suppli(?:er|es)\s+(?:of|for)\s+([A-Za-z\s&.,()]{4,80})\b",
+            r"\bdepend(?:s|ent|ence)\s+(?:on|upon)\s+(?:a\s+)?(?:single|sole)\s+suppli(?:er|es?)\s+(?:of|for)\s+([A-Za-z\s&.,()]{4,80})\b",
+            r"\bno\s+(?:viable|ready|immediate)\s+(?:alternative|substitute)\s+(?:supplier|source)\s+(?:for|of)\s+([A-Za-z\s&.,()]{4,80})\b",
+        ],
+    ),
+    (
+        "key_supplier",
+        "SUPP002",
+        [
+            r"\b(?:key|critical|strategic|important)\s+suppli(?:er|es)\s+(?:include|are|of)\s+([A-Za-z\s&.,()]{4,80})\b",
+            r"\b(?:source|procure)\s+(?:our\s+)?([A-Za-z\s&.,()]{4,80})\s+from\s+(?:a\s+)?(?:key|critical|major|primary)\s+suppli(?:er|es)\b",
+            r"\b([A-Z][A-Za-z\s&.,]{4,50})\s+(?:is|are)\s+(?:our|a|the)\s+(?:primary|main|key|major)\s+suppli(?:er|es)\s+(?:of|for)\b",
+        ],
+    ),
+    (
+        "supplier_concentration",
+        "SUPP003",
+        [
+            r"\b(?:top|largest)\s+(?:3|5|10|three|five|ten)\s+(?:suppliers?|vendors?)\s+(?:account|represent)\s+",
+            r"\bsuppli(?:er|ers)\s+concentration\b[^.]*?\b(\d{1,2})%\b",
+            r"\braw\s+materials?\s+(?:are\s+)?(?:source|procure)d?\s+(?:from|through)\s+([A-Za-z\s&.,()]{4,80})\b",
+        ],
+    ),
+    (
+        "named_supplier",
+        "SUPP004",
+        [
+            r"\b(?:purchase|buy|acquire|obtain)\s+(?:our\s+)?(?:components?|materials?|parts?|modules?|inputs?)\s+from\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
+            r"\b(?:supply|procurement)\s+(?:agreement|contract|relationship|arrangement)\s+with\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
+        ],
+    ),
 ]
 
 FACILITY_PATTERNS: list[tuple[str, str, list[str]]] = [
-    ("manufacturing_site", "FAC001", [
-        r"\b(?:manufactur(?:ing|es?)|produces?|assembl(?:es|y))\s+(?:at|in|from)\s+(?:our|the|its)\s+(?:facilit(?:y|ies)|plant|site|location|campus)\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
-        r"\b(?:key|major|primary|main|critical)\s+(?:production|manufacturing|assembly)\s+(?:facilit(?:y|ies)|plant|site|location)s?\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
-        r"\b(?:facilit(?:y|ies)|plant|site)\s+(?:in|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b[^.]*?\b(?:employ(?:s|ing)?|produc(?:es?|ing)|manufactur(?:es?|ing))\b",
-    ]),
-    ("rd_center", "FAC002", [
-        r"\b(?:R&D|research\s+(?:and|&)\s+development)\s+(?:center|facility|site|lab(?:oratory)?|hub)\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
-    ]),
-    ("data_center", "FAC003", [
-        r"\bdata\s+cent(?:er|re)s?\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
-    ]),
-    ("logistics_hub", "FAC004", [
-        r"\b(?:distribution|logistics|warehouse)\s+(?:center|hub|facility)\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
-    ]),
+    (
+        "manufacturing_site",
+        "FAC001",
+        [
+            r"\b(?:manufactur(?:ing|es?)|produces?|assembl(?:es|y))\s+(?:at|in|from)\s+(?:our|the|its)\s+(?:facilit(?:y|ies)|plant|site|location|campus)\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
+            r"\b(?:key|major|primary|main|critical)\s+(?:production|manufacturing|assembly)\s+(?:facilit(?:y|ies)|plant|site|location)s?\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
+            r"\b(?:facilit(?:y|ies)|plant|site)\s+(?:in|at)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b[^.]*?\b(?:employ(?:s|ing)?|produc(?:es?|ing)|manufactur(?:es?|ing))\b",
+        ],
+    ),
+    (
+        "rd_center",
+        "FAC002",
+        [
+            r"\b(?:R&D|research\s+(?:and|&)\s+development)\s+(?:center|facility|site|lab(?:oratory)?|hub)\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
+        ],
+    ),
+    (
+        "data_center",
+        "FAC003",
+        [
+            r"\bdata\s+cent(?:er|re)s?\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
+        ],
+    ),
+    (
+        "logistics_hub",
+        "FAC004",
+        [
+            r"\b(?:distribution|logistics|warehouse)\s+(?:center|hub|facility)\s+(?:at|in|of)\s+([A-Za-z\s,]{3,60})\b",
+        ],
+    ),
 ]
 
 COMMODITY_PATTERNS: list[tuple[str, str, list[str]]] = [
-    ("raw_material_dependency", "COMD001", [
-        r"\bdepend(?:s|ent|ence)\s+(?:on|upon)\s+([a-z]{3,40})\s+(?:as\s+(?:a|our)\s+)?(?:primary|key|critical|essential)\s+(?:raw\s+)?material\b",
-        r"\b(?:critical|key|essential|vital)\s+(?:raw\s+)?materials?\s+(?:include|are|such\s+as)\s+([A-Za-z\s,/&]{4,80})\b",
-        r"\b(?:price|cost|availability|supply)\s+(?:of|for)\s+([a-z]{3,30})\s+(?:is|are|can|may|could)\s+(?:subject\s+to|affected\s+by|volatile)\b",
-    ]),
-    ("commodity_exposure", "COMD002", [
-        r"\bexpos(?:ed|ure)\s+to\s+([a-z]{3,40})\s+(?:price|market|supply)\b",
-        r"\b(?:hedge|hedging)\s+(?:our|against)\s+([a-z]{3,40})\s+(?:price|cost)\b",
-    ]),
-    ("rare_earth_critical", "COMD003", [
-        r"\brare\s+earth\b", r"\bconflict\s+minerals?\b",
-        r"\bcritical\s+(?:raw\s+)?minerals?\b",
-    ]),
-    ("energy_dependency", "COMD004", [
-        r"\benergy\s+(?:cost|price|supply|consumption|intensive)\b[^.]*?\b(\d{1,3})%\b",
-        r"\b(?:natural\s+gas|electricity|renewable\s+energy)\s+(?:accounts?\s+for|represents?)\b",
-    ]),
+    (
+        "raw_material_dependency",
+        "COMD001",
+        [
+            r"\bdepend(?:s|ent|ence)\s+(?:on|upon)\s+([a-z]{3,40})\s+(?:as\s+(?:a|our)\s+)?(?:primary|key|critical|essential)\s+(?:raw\s+)?material\b",
+            r"\b(?:critical|key|essential|vital)\s+(?:raw\s+)?materials?\s+(?:include|are|such\s+as)\s+([A-Za-z\s,/&]{4,80})\b",
+            r"\b(?:price|cost|availability|supply)\s+(?:of|for)\s+([a-z]{3,30})\s+(?:is|are|can|may|could)\s+(?:subject\s+to|affected\s+by|volatile)\b",
+        ],
+    ),
+    (
+        "commodity_exposure",
+        "COMD002",
+        [
+            r"\bexpos(?:ed|ure)\s+to\s+([a-z]{3,40})\s+(?:price|market|supply)\b",
+            r"\b(?:hedge|hedging)\s+(?:our|against)\s+([a-z]{3,40})\s+(?:price|cost)\b",
+        ],
+    ),
+    (
+        "rare_earth_critical",
+        "COMD003",
+        [
+            r"\brare\s+earth\b",
+            r"\bconflict\s+minerals?\b",
+            r"\bcritical\s+(?:raw\s+)?minerals?\b",
+        ],
+    ),
+    (
+        "energy_dependency",
+        "COMD004",
+        [
+            r"\benergy\s+(?:cost|price|supply|consumption|intensive)\b[^.]*?\b(\d{1,3})%\b",
+            r"\b(?:natural\s+gas|electricity|renewable\s+energy)\s+(?:accounts?\s+for|represents?)\b",
+        ],
+    ),
 ]
 
 OPERATIONAL_PATTERNS: list[tuple[str, str, list[str]]] = [
-    ("joint_venture", "OPER001", [
-        r"\bjoint\s+venture\b[^.]*?\b(with|between)\b[^.]*?\b([A-Z][A-Za-z\s&.,]{4,50})\b",
-        r"\b([A-Z][A-Za-z\s&.,]{4,50})\s+joint\s+venture\b",
-    ]),
-    ("licensing_dependency", "OPER003", [
-        r"\blicense\s+(?:agreement|arrangement|deal)\s+(?:with|from)\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
-        r"\bdepend(?:s|ent|ence)\s+(?:on|upon)\s+(?:a\s+)?license\s+(?:from|with)\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
-    ]),
-    ("outsourcing", "OPER004", [
-        r"\boutsourc(?:es?|ing)\s+(?:to|with)\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
-    ]),
-    ("franchise", "OPER005", [
-        r"\bfranchise\s+(?:agreement|network|partner|operat(?:or|ions?))\s+(?:with|in)\s+([A-Za-z\s&.,]{4,80})\b",
-    ]),
+    (
+        "joint_venture",
+        "OPER001",
+        [
+            r"\bjoint\s+venture\b[^.]*?\b(with|between)\b[^.]*?\b([A-Z][A-Za-z\s&.,]{4,50})\b",
+            r"\b([A-Z][A-Za-z\s&.,]{4,50})\s+joint\s+venture\b",
+        ],
+    ),
+    (
+        "licensing_dependency",
+        "OPER003",
+        [
+            r"\blicense\s+(?:agreement|arrangement|deal)\s+(?:with|from)\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
+            r"\bdepend(?:s|ent|ence)\s+(?:on|upon)\s+(?:a\s+)?license\s+(?:from|with)\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
+        ],
+    ),
+    (
+        "outsourcing",
+        "OPER004",
+        [
+            r"\boutsourc(?:es?|ing)\s+(?:to|with)\s+([A-Z][A-Za-z\s&.,]{4,50})\b",
+        ],
+    ),
+    (
+        "franchise",
+        "OPER005",
+        [
+            r"\bfranchise\s+(?:agreement|network|partner|operat(?:or|ions?))\s+(?:with|in)\s+([A-Za-z\s&.,]{4,80})\b",
+        ],
+    ),
 ]
 
 # Negative context: skip matches containing ESG/sustainability/marketing keywords
@@ -206,7 +292,10 @@ def _extract_dependencies_for_type(
                     seen_spans.add(matched_text.lower())
 
                     # Skip ESG/sustainability/marketing fluff
-                    if any(re.search(neg, matched_text, re.IGNORECASE) for neg in NEGATIVE_CONTEXT_PATTERNS):
+                    if any(
+                        re.search(neg, matched_text, re.IGNORECASE)
+                        for neg in NEGATIVE_CONTEXT_PATTERNS
+                    ):
                         continue
 
                     # Extract named entity if capture group exists
@@ -229,19 +318,22 @@ def _extract_dependencies_for_type(
                     else:
                         confidence = 0.50
 
-                    results.append({
-                        "dependency_type": dep_type,
-                        "relationship": relationship,
-                        "pattern_id": pattern_id,
-                        "entity_name": entity_name,
-                        "matched_text": matched_text[:500],
-                        "confidence": confidence,
-                        "source_url": source_url,
-                        "uncertainty_reason": (
-                            "pattern_based_extraction" if not entity_name
-                            else "entity_name_extracted_not_resolved"
-                        ),
-                    })
+                    results.append(
+                        {
+                            "dependency_type": dep_type,
+                            "relationship": relationship,
+                            "pattern_id": pattern_id,
+                            "entity_name": entity_name,
+                            "matched_text": matched_text[:500],
+                            "confidence": confidence,
+                            "source_url": source_url,
+                            "uncertainty_reason": (
+                                "pattern_based_extraction"
+                                if not entity_name
+                                else "entity_name_extracted_not_resolved"
+                            ),
+                        }
+                    )
             except re.error as e:
                 logger.debug(f"Regex error in {pattern_id}: {e}")
                 continue
@@ -275,10 +367,7 @@ def discover_dependencies_from_text(
         deps = _extract_dependencies_for_type(text, dep_type, patterns, source_url)
         all_deps.extend(deps)
 
-    logger.info(
-        f"Extracted {len(all_deps)} dependency candidates from text "
-        f"({len(text)} chars)"
-    )
+    logger.info(f"Extracted {len(all_deps)} dependency candidates from text ({len(text)} chars)")
     return all_deps
 
 
@@ -293,10 +382,8 @@ def download_annual_report(
     Uses known report URLs, auto-discovers from IR page, or scrapes domain.
     Returns path to downloaded PDF, or None if download fails.
     """
-    import httpx
-
     # Known annual report URLs (from delegation research 2026-06-19)
-    KNOWN_REPORTS: dict[str, str] = {
+    known_reports: dict[str, str] = {
         "NL0010273215": "https://ourbrand.asml.com/m/6ea363f69344ebd4/original/asml-2025-annual-report-based-on-ifrs.pdf",
         "FR0000121014": "https://lvmh-com.cdn.prismic.io/lvmh-com/ac0pyZGXnQHGZK4S_LVMH_RA2025_GB_MEL1.pdf",
         "DE0007164600": "https://www.sap.com/docs/download/investors/2025/sap-2025-integrated-report.pdf",
@@ -306,7 +393,7 @@ def download_annual_report(
         "DE0008404005": "https://www.allianz.com/content/dam/onemarketing/azcom/Allianz_com/investor-relations/en/results-reports/annual-report/ar-2025/en-allianz-group-annual-report-2025.pdf",
     }
 
-    url = report_url or KNOWN_REPORTS.get(isin)
+    url = report_url or known_reports.get(isin)
     if not url:
         # P0-1: Attempt automated URL discovery from IR page
         url = _discover_annual_report_url(db, isin)
@@ -314,13 +401,22 @@ def download_annual_report(
             logger.warning(f"No known annual report URL for ISIN {isin}")
             return None
 
+    # Validate before touching the local cache as well as before opening a
+    # connection. This keeps analyst-supplied and HTML-discovered URLs inside
+    # the same public-HTTP boundary.
+    try:
+        validate_public_http_url(url)
+    except URLSafetyError as exc:
+        logger.warning("Refusing unsafe annual-report URL for %s: %s", isin, exc)
+        return None
+
     # Determine filename from URL
     parsed = urlparse(url)
     filename = Path(parsed.path).name or f"{isin}_annual_report.pdf"
     output_path = output_dir / filename
 
     # Skip if already downloaded
-    if output_path.exists():
+    if output_path.is_file():
         logger.info(f"Annual report already downloaded: {output_path}")
         return output_path
 
@@ -329,25 +425,42 @@ def download_annual_report(
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) "
-                          "Chrome/131.0.0.0 Safari/537.36",
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/131.0.0.0 Safari/537.36",
             "Accept": "text/html,application/pdf,*/*",
             "Accept-Language": "en-US,en;q=0.9",
             # Cloudflare/Akamai bypass: send full browser headers
             "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
             "Sec-Ch-Ua-Mobile": "?0",
             "Sec-Ch-Ua-Platform": '"macOS"',
-            "Referer": url.split("/annual-report")[0] if "/annual-report" in url else
-                       "/".join(url.split("/")[:3]),
+            "Referer": url.split("/annual-report")[0]
+            if "/annual-report" in url
+            else "/".join(url.split("/")[:3]),
         }
-        with httpx.Client(timeout=120, follow_redirects=True, headers=headers) as client:
-            response = client.get(url)
+        with httpx.Client(
+            timeout=120,
+            follow_redirects=False,
+            trust_env=False,
+            headers=headers,
+        ) as client:
+            response = safe_get(
+                client,
+                url,
+                timeout=120,
+                max_bytes=MAX_ANNUAL_REPORT_BYTES,
+            )
             response.raise_for_status()
 
             # Verify it's a PDF
             content_type = response.headers.get("content-type", "")
-            if "pdf" not in content_type.lower() and not url.endswith(".pdf"):
+            if "pdf" not in content_type.lower() and not url.lower().split("?", 1)[0].endswith(
+                ".pdf"
+            ):
                 logger.warning(f"Response may not be PDF: content-type={content_type} for {url}")
+
+            if not response.content.startswith(b"%PDF-"):
+                logger.warning("Response is not a PDF document: %s", url)
+                return None
 
             # P0-1: Reject tiny PDFs (<500KB) — likely earnings releases, not annual reports
             content_len = len(response.content)
@@ -379,10 +492,9 @@ def _discover_annual_report_url(db, isin: str) -> str | None:
     3. Find links matching 'annual report' + year pattern, filtering for .pdf
     4. Return first match
     """
-    import httpx
-    from bs4 import BeautifulSoup
-    import re
     from datetime import datetime
+
+    from bs4 import BeautifulSoup
 
     # Look up IR URL from registry
     if db is None:
@@ -410,8 +522,8 @@ def _discover_annual_report_url(db, isin: str) -> str | None:
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/131.0.0.0 Safari/537.36",
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,*/*",
         "Accept-Language": "en-US,en;q=0.9",
     }
@@ -433,9 +545,13 @@ def _discover_annual_report_url(db, isin: str) -> str | None:
         (str(current_year), 2),
         (str(current_year - 1), 2),
         # Low-quality (quarterly/interim — only accept if no annual found)
-        ("q1", 1), ("q2", 1), ("q3", 1),
-        ("quarterly", 1), ("interim", 1),
-        ("earnings-release", 1), ("earnings_release", 1),
+        ("q1", 1),
+        ("q2", 1),
+        ("q3", 1),
+        ("quarterly", 1),
+        ("interim", 1),
+        ("earnings-release", 1),
+        ("earnings_release", 1),
     ]
 
     best_url = None
@@ -443,8 +559,13 @@ def _discover_annual_report_url(db, isin: str) -> str | None:
 
     for page_url in urls_to_try:
         try:
-            with httpx.Client(timeout=30, follow_redirects=True, headers=headers) as client:
-                resp = client.get(page_url)
+            with httpx.Client(
+                timeout=30,
+                follow_redirects=False,
+                trust_env=False,
+                headers=headers,
+            ) as client:
+                resp = safe_get(client, page_url, timeout=30, max_bytes=MAX_DISCOVERY_HTML_BYTES)
                 if resp.status_code != 200:
                     continue
 
@@ -464,10 +585,9 @@ def _discover_annual_report_url(db, isin: str) -> str | None:
                             if score > best_score:
                                 best_score = score
                                 from urllib.parse import urljoin
+
                                 best_url = urljoin(page_url, href)
-                                logger.debug(
-                                    f"Candidate annual report (score={score}): {best_url}"
-                                )
+                                logger.debug(f"Candidate annual report (score={score}): {best_url}")
                             break  # First matching pattern wins for this link
 
         except Exception as e:
@@ -476,8 +596,7 @@ def _discover_annual_report_url(db, isin: str) -> str | None:
 
     if best_url and best_score >= 2:
         logger.info(
-            f"Discovered annual report for {row['canonical_name']}: "
-            f"{best_url} (score={best_score})"
+            f"Discovered annual report for {row['canonical_name']}: {best_url} (score={best_score})"
         )
         return best_url
 
@@ -517,7 +636,6 @@ def _ensure_target_registry_entry(
                 return existing[0]
 
     # Create synthetic registry entry
-    now = datetime.now(timezone.utc).isoformat()
     cursor = db.execute(
         """INSERT INTO registry
            (canonical_name, company_type, jurisdiction, status)
@@ -528,8 +646,7 @@ def _ensure_target_registry_entry(
     registry_id = cursor.lastrowid
     assert registry_id is not None, "INSERT should return lastrowid"
     logger.debug(
-        f"Created synthetic registry entry {registry_id} for "
-        f"{entity_type}: {entity_name[:60]}"
+        f"Created synthetic registry entry {registry_id} for {entity_type}: {entity_name[:60]}"
     )
     return registry_id
 
@@ -549,7 +666,7 @@ def store_dependency_edges(
     Returns count of new edges stored.
     """
     if now is None:
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
     stored = 0
     for dep in dependencies:
@@ -628,7 +745,7 @@ def promote_existing_economic_entities(
 
     Returns dict with created/duplicate/error counts.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
 
     type_map = {
         "customer": "customer_of",
@@ -693,12 +810,20 @@ def promote_existing_economic_entities(
                            'not_disclosed_in_source',
                            'outgoing', date('now'), ?,
                            ?, ?, ?, ?, ?, ?, ?)""",
-                (registry_id, target_reg_id, relationship_type, evidence_id, now,
-                 attrs["shock_channel"], attrs["shock_channel_unknown_reason"],
-                 attrs["lag_bucket"], attrs["buffer_proxy"],
-                 attrs["replaceability_unknown_reason"],
-                 attrs["switching_time_bucket"],
-                 dedup_key),
+                (
+                    registry_id,
+                    target_reg_id,
+                    relationship_type,
+                    evidence_id,
+                    now,
+                    attrs["shock_channel"],
+                    attrs["shock_channel_unknown_reason"],
+                    attrs["lag_bucket"],
+                    attrs["buffer_proxy"],
+                    attrs["replaceability_unknown_reason"],
+                    attrs["switching_time_bucket"],
+                    dedup_key,
+                ),
             )
             created += 1
         except Exception as exc:
@@ -764,15 +889,15 @@ def discover_economic_dependencies(
         )
     elif not text[:500].isascii():
         logger.info(
-            f"Content appears non-English. Consider adding language-specific "
-            f"patterns for DE/FR/IT/ES/NL content."
+            "Content appears non-English. Consider adding language-specific "
+            "patterns for DE/FR/IT/ES/NL content."
         )
 
     # 3. Store full text as evidence
     # P1-2 fix: store FULL extracted text (not truncated to 50K)
     # Annual reports are 200K-1.4M chars; critical dependency sections
     # (Risk Factors, IFRS 8, Notes) are typically in the back half
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     ev_result = store_evidence(
         db=db,
         content=text,  # Full text — no truncation
@@ -800,7 +925,6 @@ def discover_economic_dependencies(
 
     counts["stored"] = stored
     logger.info(
-        f"{canonical_name}: {len(dependencies)} dependency candidates, "
-        f"{stored} stored — {counts}"
+        f"{canonical_name}: {len(dependencies)} dependency candidates, {stored} stored — {counts}"
     )
     return counts

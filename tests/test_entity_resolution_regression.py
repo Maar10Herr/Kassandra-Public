@@ -12,14 +12,9 @@ Valid fixtures that MUST continue to match (regression guard):
   - Multi-token subset matches (Moet Chandon)
 """
 
-import sqlite3
-from unittest.mock import MagicMock, patch
-
-import httpx
-import pytest
-
 
 # ── BODACC false-case fixtures ────────────────────────────────────────────────
+
 
 def test_bodacc_delphine_sas_must_not_match_limousin_delphine_limousin_ei():
     """DELPHINE SAS must not match 'LIMOUSIN, Delphine, LIMOUSIN (EI)'."""
@@ -55,6 +50,7 @@ def test_bodacc_hermes_international_must_not_match_hermes_gastronomie():
 
 # ── Gazette false-case fixture ─────────────────────────────────────────────────
 
+
 def test_gazette_k_b_tech_limited_must_not_match_corenet_tech():
     """K B TECH LIMITED must not match CORENET TECH (UK) PVT LTD."""
     from kassandra.sources.gazette import _notice_matches_company
@@ -67,6 +63,7 @@ def test_gazette_k_b_tech_limited_must_not_match_corenet_tech():
 
 
 # ── Valid fixtures that MUST continue to match ─────────────────────────────────
+
 
 def test_bodacc_lvmh_still_matches():
     from kassandra.sources.bodacc import _notice_matches_company
@@ -89,17 +86,13 @@ def test_bodacc_airbus_still_matches():
 def test_bodacc_saint_gobain_still_matches():
     from kassandra.sources.bodacc import _notice_matches_company
 
-    assert _notice_matches_company(
-        "SAINT-GOBAIN", "SAINT GOBAIN DISTRIBUTION BATIMENT"
-    )
+    assert _notice_matches_company("SAINT-GOBAIN", "SAINT GOBAIN DISTRIBUTION BATIMENT")
 
 
 def test_bodacc_moet_chandon_still_matches():
     from kassandra.sources.bodacc import _notice_matches_company
 
-    assert _notice_matches_company(
-        "Moet Chandon", "LVMH MOET HENNESSY CHANDON"
-    )
+    assert _notice_matches_company("Moet Chandon", "LVMH MOET HENNESSY CHANDON")
 
 
 def test_bodacc_no_match_different_company_still_works():
@@ -141,14 +134,13 @@ def test_gazette_no_match_different_company_still_works():
 
 # ── BORME: no single-token confirmed direct matches with generic tokens ────────
 
+
 def test_borme_conservative_single_token_suppression():
     """A single-token generic match should not create a confirmed direct event."""
     from kassandra.sources.borme import _notice_matches_company
 
     # "IBERDROLA" alone (1 word, distinctive) should still match
-    assert _notice_matches_company(
-        "IBERDROLA", "IBERDROLA S.A. — Convocatoria de junta", ""
-    )
+    assert _notice_matches_company("IBERDROLA", "IBERDROLA S.A. — Convocatoria de junta", "")
     # But something that reduces to a generic token should not match
     # "TECH SA" → after stripping SA: ["tech"]. Generic.
     # Against "SCHNEIDER ELECTRIC TECH SL" → after stripping: tokens include "tech".

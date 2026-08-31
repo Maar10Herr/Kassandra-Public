@@ -145,21 +145,23 @@ def test_detect_new_adverse_events_excludes_tombstoned_events():
 def test_format_alerts_includes_why_source_and_evidence():
     from kassandra.daemon import format_alerts
 
-    message = format_alerts([
-        {
-            "event_id": 7,
-            "company": "AlertCo",
-            "event_type": "insolvency",
-            "severity": "critical",
-            "confidence": 0.95,
-            "description": "filed for insolvency after lenders withdrew support",
-            "pattern_id": "P001",
-            "publication_time": "2026-06-23",
-            "source": "companies_house_api",
-            "evidence_id": 3,
-            "source_url": "https://example.test/filing",
-        }
-    ])
+    message = format_alerts(
+        [
+            {
+                "event_id": 7,
+                "company": "AlertCo",
+                "event_type": "insolvency",
+                "severity": "critical",
+                "confidence": 0.95,
+                "description": "filed for insolvency after lenders withdrew support",
+                "pattern_id": "P001",
+                "publication_time": "2026-06-23",
+                "source": "companies_house_api",
+                "evidence_id": 3,
+                "source_url": "https://example.test/filing",
+            }
+        ]
+    )
     assert "Kassandra real-time adverse-event alert" in message
     assert "AlertCo" in message
     assert "Why:" in message
@@ -179,12 +181,14 @@ def test_run_alert_cycle_bootstraps_without_replaying_history(tmp_path: Path):
     db.commit()
 
     state_path = tmp_path / "daemon.json"
-    with patch.object(daemon_mod, "get_db", return_value=db), \
-         patch.object(daemon_mod, "migrate", return_value=10), \
-         patch.object(daemon_mod, "run_collection", return_value={"companies_house": 0}), \
-         patch.object(daemon_mod, "compute_scores", return_value=[]), \
-         patch.object(daemon_mod, "_acquire_cycle_lock", return_value=True), \
-         patch.object(daemon_mod, "_release_cycle_lock", return_value=None):
+    with (
+        patch.object(daemon_mod, "get_db", return_value=db),
+        patch.object(daemon_mod, "migrate", return_value=10),
+        patch.object(daemon_mod, "run_collection", return_value={"companies_house": 0}),
+        patch.object(daemon_mod, "compute_scores", return_value=[]),
+        patch.object(daemon_mod, "_acquire_cycle_lock", return_value=True),
+        patch.object(daemon_mod, "_release_cycle_lock", return_value=None),
+    ):
         result = daemon_mod.run_alert_cycle(state_path=state_path, collect=True)
 
     assert result["status"] == "ok"

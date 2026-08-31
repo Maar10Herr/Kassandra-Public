@@ -17,14 +17,14 @@ nullable materiality, CH officer cross-referencing, selective expansion.
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
-from kassandra.config import get_config
 from kassandra.evidence import store_evidence
+from kassandra.http_security import safe_get
 from kassandra.observability import journal_event, log_source_event
-from kassandra.sources.gleif import GleifClient
 from kassandra.shock_channel import populate_edge_attributes
+from kassandra.sources.gleif import GleifClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,19 +45,15 @@ GLEIF_RELATIONSHIP_MAP = {
 }
 
 
-def _get_or_create_lei_entity(
-    db: sqlite3.Connection, lei: str, lei_name: str | None = None
-) -> int:
+def _get_or_create_lei_entity(db: sqlite3.Connection, lei: str, lei_name: str | None = None) -> int:
     """Get registry_id for an LEI, creating a placeholder if not found."""
-    existing = db.execute(
-        "SELECT id FROM registry WHERE lei = ?", (lei,)
-    ).fetchone()
+    existing = db.execute("SELECT id FROM registry WHERE lei = ?", (lei,)).fetchone()
 
     if existing:
         return existing["id"]
 
     # Create minimal placeholder — materiality is explicitly UNKNOWN (NULL)
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     status = "gleif_placeholder" if not lei_name else "lei_resolved"
     cursor = db.execute(
         """INSERT INTO registry (canonical_name, lei, status, resolved_at, updated_at)
@@ -96,7 +92,7 @@ def build_gleif_edges(
     if gleif_client is None:
         gleif_client = GleifClient()
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     edges_created = 0
 
     our_registry = db.execute(
@@ -139,28 +135,32 @@ def build_gleif_edges(
 
             target_id = _get_or_create_lei_entity(db, target_lei_id)
 
-            confidence = _gleif_relationship_confidence(
-                rel_info.get("corroboration_level", "")
-            )
+            confidence = _gleif_relationship_confidence(rel_info.get("corroboration_level", ""))
 
             # Store relationship as evidence
-            evidence_content = json.dumps({
-                "gleif_relationship": rel_info,
-                "source_lei": lei,
-                "relationship_type": gleif_rel_type,
-            })
+            evidence_content = json.dumps(
+                {
+                    "gleif_relationship": rel_info,
+                    "source_lei": lei,
+                    "relationship_type": gleif_rel_type,
+                }
+            )
             ev_result = store_evidence(
-                db=db, content=evidence_content,
+                db=db,
+                content=evidence_content,
                 source_url=f"https://api.gleif.org/api/v1/lei-records/{lei}/{rel_type}-relationships",
-                retrieval_time=now, extraction_method="gleif_relationship",
-                parser_version="1.0.0", content_type="application/json",
+                retrieval_time=now,
+                extraction_method="gleif_relationship",
+                parser_version="1.0.0",
+                content_type="application/json",
                 excerpt=f"GLEIF {gleif_rel_type}: {lei} ↔ {target_lei_id}",
                 source_reliability=1.0,
             )
             evidence_id = ev_result.evidence_id
 
             edge_id = _upsert_edge(
-                db=db, source_registry_id=source_id,
+                db=db,
+                source_registry_id=source_id,
                 target_registry_id=target_id,
                 relationship_type=internal_type,
                 evidence_id=evidence_id,
@@ -218,12 +218,19 @@ def _upsert_edge(
                switching_time_bucket = COALESCE(switching_time_bucket, ?),
                dedup_key = COALESCE(dedup_key, ?)
                WHERE id = ?""",
-            (confidence, materiality, criticality, evidence_id,
-             json.dumps({"gleif_corroboration": corroboration}) if corroboration else None,
-             attrs["shock_channel"], attrs["lag_bucket"],
-             attrs["buffer_proxy"], attrs["switching_time_bucket"],
-             dedup_key,
-             existing["id"]),
+            (
+                confidence,
+                materiality,
+                criticality,
+                evidence_id,
+                json.dumps({"gleif_corroboration": corroboration}) if corroboration else None,
+                attrs["shock_channel"],
+                attrs["lag_bucket"],
+                attrs["buffer_proxy"],
+                attrs["switching_time_bucket"],
+                dedup_key,
+                existing["id"],
+            ),
         )
         return existing["id"]
 
@@ -236,13 +243,23 @@ def _upsert_edge(
             dedup_key)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?,
                    ?, ?, ?, ?, ?)""",
-        (source_registry_id, target_registry_id, relationship_type,
-         evidence_id, confidence, materiality, criticality,
-         json.dumps({"gleif_corroboration": corroboration}) if corroboration else None,
-         edge_source, now,
-         attrs["shock_channel"], attrs["lag_bucket"],
-         attrs["buffer_proxy"], attrs["switching_time_bucket"],
-         dedup_key),
+        (
+            source_registry_id,
+            target_registry_id,
+            relationship_type,
+            evidence_id,
+            confidence,
+            materiality,
+            criticality,
+            json.dumps({"gleif_corroboration": corroboration}) if corroboration else None,
+            edge_source,
+            now,
+            attrs["shock_channel"],
+            attrs["lag_bucket"],
+            attrs["buffer_proxy"],
+            attrs["switching_time_bucket"],
+            dedup_key,
+        ),
     )
     return cursor.lastrowid
 
@@ -264,29 +281,42 @@ def build_companies_house_officer_edges(
     """
     if ch_client is None:
         from kassandra.sources.companies_house import CompaniesHouseClient
+
         ch_client = CompaniesHouseClient()
 
     if not ch_client.available:
         return 0
 
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     edges_created = 0
 
     # Fetch officers
     try:
         import httpx
-        resp = httpx.get(
-            f"https://api.companieshouse.gov.uk/company/{companies_house_number}/officers",
-            headers=ch_client._auth_headers(),
-            timeout=30,
+
+        officers_url = (
+            f"https://api.companieshouse.gov.uk/company/{companies_house_number}/officers"
         )
+        with httpx.Client(timeout=30, follow_redirects=False, trust_env=False) as client:
+            resp = safe_get(
+                client,
+                officers_url,
+                headers=ch_client._auth_headers(),
+                timeout=30,
+                max_bytes=2 * 1024 * 1024,
+            )
         resp.raise_for_status()
         officers_data = resp.json()
     except Exception as e:
         logger.warning(f"Officers fetch failed for {companies_house_number}: {e}")
-        log_source_event(db, "companies_house_officers", "api",
-                         f"https://api.companieshouse.gov.uk/company/{companies_house_number}/officers",
-                         "failure", {"error": str(e)})
+        log_source_event(
+            db,
+            "companies_house_officers",
+            "api",
+            f"https://api.companieshouse.gov.uk/company/{companies_house_number}/officers",
+            "failure",
+            {"error": str(e)},
+        )
         return 0
 
     items = officers_data.get("items", [])
@@ -294,16 +324,17 @@ def build_companies_house_officer_edges(
         return 0
 
     # Store officer list as evidence
-    ev_result = store_evidence(
-        db=db, content=json.dumps(officers_data),
+    store_evidence(
+        db=db,
+        content=json.dumps(officers_data),
         source_url=f"https://api.companieshouse.gov.uk/company/{companies_house_number}/officers",
-        retrieval_time=now, extraction_method="companies_house_officers",
-        parser_version="2.0.0", content_type="application/json",
+        retrieval_time=now,
+        extraction_method="companies_house_officers",
+        parser_version="2.0.0",
+        content_type="application/json",
         excerpt=f"{len(items)} officers for {companies_house_number}",
         source_reliability=1.0,
     )
-    evidence_id = ev_result.evidence_id
-
     # Get all other UK-registered companies in our registry
     other_companies = db.execute(
         """SELECT id, canonical_name, companies_house_number
@@ -320,14 +351,17 @@ def build_companies_house_officer_edges(
     for officer in items:
         officer_name = _normalize_officer_name(officer.get("name", ""))
         officer_role = officer.get("officer_role", "")
-        date_of_birth = officer.get("date_of_birth", {})
-
         if not officer_name or len(officer_name) < 3:
             continue
 
         # Only consider directors and significant controllers
-        if officer_role not in ("director", "llp-member", "llp-designated-member",
-                                "corporate-director", "corporate-llp-member"):
+        if officer_role not in (
+            "director",
+            "llp-member",
+            "llp-designated-member",
+            "corporate-director",
+            "corporate-llp-member",
+        ):
             continue
 
         # Check if officer appears in other registry companies
@@ -342,9 +376,13 @@ def build_companies_house_officer_edges(
             # which is O(n*m) API calls — defer to selective multi-hop
             pass
 
-    log_source_event(db, "companies_house_officers", "api",
-                     f"https://api.companieshouse.gov.uk/company/{companies_house_number}/officers",
-                     "success")
+    log_source_event(
+        db,
+        "companies_house_officers",
+        "api",
+        f"https://api.companieshouse.gov.uk/company/{companies_house_number}/officers",
+        "success",
+    )
     return edges_created
 
 
@@ -354,9 +392,10 @@ def _normalize_officer_name(name: str) -> str:
         return ""
     # Remove titles, middle names, normalize spacing
     import re
+
     # Strip common titles
     name = re.sub(
-        r'\b(Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Lord|Dame|Hon)\.?\s+', '', name, flags=re.IGNORECASE
+        r"\b(Mr|Mrs|Ms|Miss|Dr|Prof|Sir|Lord|Dame|Hon)\.?\s+", "", name, flags=re.IGNORECASE
     )
     # Normalize whitespace
     name = " ".join(name.split())
@@ -376,10 +415,14 @@ def collect_all_edges(
     gleif_client = GleifClient()
     results: dict[str, int] = {"gleif": 0, "ch_officers": 0}
 
-    journal_event(db, "graph_build_start", {
-        "max_children": max_children_per_company,
-        "expand_hops": expand_hops,
-    })
+    journal_event(
+        db,
+        "graph_build_start",
+        {
+            "max_children": max_children_per_company,
+            "expand_hops": expand_hops,
+        },
+    )
 
     # GLEIF edges for companies with LEIs
     rows = db.execute(
@@ -391,24 +434,25 @@ def collect_all_edges(
             continue
         try:
             count = build_gleif_edges(
-                db=db, lei=row["lei"], gleif_client=gleif_client,
+                db=db,
+                lei=row["lei"],
+                gleif_client=gleif_client,
                 max_children=max_children_per_company,
             )
             results["gleif"] += count
             # P1-4: Record collection completeness
-            _record_edge_collection_state(
-                db, row["id"], "gleif",
-                max_children_per_company, count
-            )
+            _record_edge_collection_state(db, row["id"], "gleif", max_children_per_company, count)
             if count > 0:
                 logger.info(f"  {row['canonical_name'][:40]}: {count} GLEIF edges")
         except Exception as e:
             logger.warning(f"GLEIF edges failed for {row['canonical_name']}: {e}")
-            log_source_event(db, "gleif", "api", "https://api.gleif.org/api/v1",
-                             "failure", {"error": str(e)})
+            log_source_event(
+                db, "gleif", "api", "https://api.gleif.org/api/v1", "failure", {"error": str(e)}
+            )
 
         if i > 0 and i % 5 == 0:
             import time
+
             time.sleep(0.5)
 
     # CH officer edges for UK-registered companies
@@ -419,7 +463,8 @@ def collect_all_edges(
     for row in ch_rows:
         try:
             count = build_companies_house_officer_edges(
-                db=db, companies_house_number=row["companies_house_number"],
+                db=db,
+                companies_house_number=row["companies_house_number"],
                 registry_id=row["id"],
             )
             results["ch_officers"] += count
@@ -451,38 +496,51 @@ def collect_all_edges(
         "AND json_extract(shock_channels, '$.gleif_corroboration') = 'PARTIALLY_CORROBORATED'"
     ).fetchone()[0]
     gleif_uncorroborated = results["gleif"] - gleif_conf - gleif_supplied - gleif_partial
-    economic_edges = db.execute(
-        "SELECT COUNT(*) FROM edges WHERE edge_source='manual'"
-    ).fetchone()[0]
+    economic_edges = db.execute("SELECT COUNT(*) FROM edges WHERE edge_source='manual'").fetchone()[
+        0
+    ]
 
-    journal_event(db, "graph_build_complete", {
-        "gleif_edges": results["gleif"],
-        "ch_officer_edges": results["ch_officers"],
-        "corroboration": {
-            "fully_corroborated": gleif_conf,
-            "partially_corroborated": gleif_partial,
-            "entity_supplied_only": gleif_supplied,
-            "uncorroborated": gleif_uncorroborated,
-            "economic_manual": economic_edges,
-        },
-        "corroboration_gap": (
-            "SINGLE_SOURCE" if results["ch_officers"] == 0
-            else "PARTIAL_MULTI_SOURCE"
-        ),
-    })
-    if results["ch_officers"] == 0:
-        journal_event(db, "corroboration_gap", {
-            "severity": "info",
-            "message": (
-                f"{results['gleif']} GLEIF edges have no second-source corroboration. "
-                f"Only {gleif_conf} are FULLY_CORROBORATED by GLEIF's own validation. "
-                f"{gleif_supplied} are ENTITY_SUPPLIED_ONLY (self-reported). "
-                "Consider adding CH officer cross-reference or annual report extraction "
-                "as a second data source."
+    journal_event(
+        db,
+        "graph_build_complete",
+        {
+            "gleif_edges": results["gleif"],
+            "ch_officer_edges": results["ch_officers"],
+            "corroboration": {
+                "fully_corroborated": gleif_conf,
+                "partially_corroborated": gleif_partial,
+                "entity_supplied_only": gleif_supplied,
+                "uncorroborated": gleif_uncorroborated,
+                "economic_manual": economic_edges,
+            },
+            "corroboration_gap": (
+                "SINGLE_SOURCE" if results["ch_officers"] == 0 else "PARTIAL_MULTI_SOURCE"
             ),
-        })
-    log_source_event(db, "graph_builder", "processor", None,
-                     "success", {"count": results["gleif"] + results["ch_officers"]})
+        },
+    )
+    if results["ch_officers"] == 0:
+        journal_event(
+            db,
+            "corroboration_gap",
+            {
+                "severity": "info",
+                "message": (
+                    f"{results['gleif']} GLEIF edges have no second-source corroboration. "
+                    f"Only {gleif_conf} are FULLY_CORROBORATED by GLEIF's own validation. "
+                    f"{gleif_supplied} are ENTITY_SUPPLIED_ONLY (self-reported). "
+                    "Consider adding CH officer cross-reference or annual report extraction "
+                    "as a second data source."
+                ),
+            },
+        )
+    log_source_event(
+        db,
+        "graph_builder",
+        "processor",
+        None,
+        "success",
+        {"count": results["gleif"] + results["ch_officers"]},
+    )
 
     logger.info(f"Edge collection: {results}")
     return results
@@ -626,9 +684,7 @@ def _corroborate_gleif_against_annual_reports(db: sqlite3.Connection) -> int:
                 found_count += 1
 
         if found_count > 0:
-            logger.info(
-                f"  {name}: {found_count} GLEIF subsidiaries corroborated by annual report"
-            )
+            logger.info(f"  {name}: {found_count} GLEIF subsidiaries corroborated by annual report")
             db.commit()
         corroborated += found_count
 
@@ -647,7 +703,7 @@ def _record_edge_collection_state(
     Detects cap hits: when edges_retrieved approaches the theoretical max
     (2 × max_children for GLEIF: direct + ultimate), the cap was binding.
     """
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     theoretical_max = max_children * 2  # direct + ultimate
     cap_hit = edges_retrieved >= (theoretical_max - 5)  # within 5 of max
 
@@ -657,7 +713,10 @@ def _record_edge_collection_state(
             collection_stopped_reason, collected_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)""",
         (
-            registry_id, source, edges_retrieved, max_children,
+            registry_id,
+            source,
+            edges_retrieved,
+            max_children,
             int(cap_hit),
             "cap" if cap_hit else "end_of_data",
             now,

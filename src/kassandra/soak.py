@@ -11,7 +11,7 @@ import sqlite3
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +25,7 @@ SOAK_STATE_PATH = Path(__file__).resolve().parent.parent.parent / "state" / "soa
 
 # ── State management ──────────────────────────────────────────────────────────
 
+
 def load_soak_state() -> dict[str, Any]:
     """Load or initialise soak state."""
     if SOAK_STATE_PATH.exists():
@@ -33,7 +34,7 @@ def load_soak_state() -> dict[str, Any]:
 
 
 def _fresh_state() -> dict[str, Any]:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     return {
         "started_at": now,
         "cycles_completed": 0,
@@ -65,12 +66,13 @@ def save_soak_state(state: dict[str, Any]) -> None:
 
 # ── Metrics collection ────────────────────────────────────────────────────────
 
+
 def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
     """Collect all soak metrics from the database and system.
 
     Every metric is traceable to a specific SQL query — see reconciliation tests.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     config = get_config()
 
     # Database stats
@@ -79,9 +81,7 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
 
     # Edge counts by source
     edge_counts = {}
-    for row in db.execute(
-        "SELECT edge_source, COUNT(*) FROM edges GROUP BY edge_source"
-    ):
+    for row in db.execute("SELECT edge_source, COUNT(*) FROM edges GROUP BY edge_source"):
         edge_counts[row[0]] = row[1]
     total_edges = sum(edge_counts.values())
 
@@ -89,9 +89,7 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
     total_registry = db.execute("SELECT COUNT(*) FROM registry").fetchone()[0]
 
     # Portfolio companies (scoreable_companies view)
-    portfolio_count = db.execute(
-        "SELECT COUNT(*) FROM scoreable_companies"
-    ).fetchone()[0]
+    portfolio_count = db.execute("SELECT COUNT(*) FROM scoreable_companies").fetchone()[0]
 
     # Evidence — total stored (deduplicated by content_hash)
     total_evidence = db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
@@ -116,15 +114,20 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
 
     # Evidence processed (including deduplicated) — from the collection step counts
     evidence_processed = {}
-    for row in db.execute(
-        "SELECT source_name, SUM(documents_discovered) FROM source_runs WHERE run_id=? GROUP BY source_name",
-        (recent_run_id,),
-    ) if recent_run_id else []:
+    for row in (
+        db.execute(
+            "SELECT source_name, SUM(documents_discovered) FROM source_runs WHERE run_id=? GROUP BY source_name",
+            (recent_run_id,),
+        )
+        if recent_run_id
+        else []
+    ):
         evidence_processed[row[0]] = row[1] or 0
 
     # Scores — portfolio companies from scoreable_companies view
     # Extended with company name, watch/coverage priority fields, and trigger event details
-    score_rows = list(db.execute("""
+    score_rows = list(
+        db.execute("""
         SELECT s.registry_id,
                s.analyst_priority, s.deterioration_risk, s.dependency_exposure,
                s.observation_severity, s.computed_at,
@@ -165,7 +168,8 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
             SELECT MAX(s2.computed_at) FROM scores s2 WHERE s2.registry_id = s.registry_id
         )
         ORDER BY s.active_watch_priority DESC, s.coverage_monitor_priority DESC
-    """))
+    """)
+    )
     scores_list = [
         {
             "registry_id": r[0],
@@ -191,17 +195,25 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
         for r in score_rows
     ]
     portfolio_scored = len(scores_list)
-    mean_priority = sum(s["priority"] for s in scores_list) / portfolio_scored if portfolio_scored else 0
+    mean_priority = (
+        sum(s["priority"] for s in scores_list) / portfolio_scored if portfolio_scored else 0
+    )
     max_priority = max(s["priority"] for s in scores_list) if scores_list else 0
 
     # Build watchlist and coverage queue from scores
-    active_watchlist = [s for s in scores_list if s.get('active_watch_priority', 0) > 0]
-    active_watchlist.sort(key=lambda s: s.get('active_watch_priority', 0), reverse=True)
-    coverage_queue = [s for s in scores_list if s.get('active_watch_priority', 0) == 0 and s.get('coverage_monitor_priority', 0) > 0]
-    coverage_queue.sort(key=lambda s: s.get('coverage_monitor_priority', 0), reverse=True)
+    active_watchlist = [s for s in scores_list if s.get("active_watch_priority", 0) > 0]
+    active_watchlist.sort(key=lambda s: s.get("active_watch_priority", 0), reverse=True)
+    coverage_queue = [
+        s
+        for s in scores_list
+        if s.get("active_watch_priority", 0) == 0 and s.get("coverage_monitor_priority", 0) > 0
+    ]
+    coverage_queue.sort(key=lambda s: s.get("coverage_monitor_priority", 0), reverse=True)
 
     active_watch_count = len(active_watchlist)
-    transmission_watch_count = sum(1 for s in active_watchlist if s.get('transmission_signal_score', 0) > 0)
+    transmission_watch_count = sum(
+        1 for s in active_watchlist if s.get("transmission_signal_score", 0) > 0
+    )
     direct_watch_count = active_watch_count - transmission_watch_count
 
     # Enrich watchlist items with dependency paths, trigger details, and evidence IDs.
@@ -240,14 +252,24 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
             # Try economic edges first
             for edge_filter in [
                 # Economic edges (preferred)
-                (['supplier_to','customer_of','facility_at','commodity_input','operational_dependency'], False),
+                (
+                    [
+                        "supplier_to",
+                        "customer_of",
+                        "facility_at",
+                        "commodity_input",
+                        "operational_dependency",
+                    ],
+                    False,
+                ),
                 # GLEIF edges (fallback)
-                (['parent_subsidiary','ultimate_parent','branch_of'], True),
+                (["parent_subsidiary", "ultimate_parent", "branch_of"], True),
             ]:
                 edge_types, is_gleif = edge_filter
-                placeholders = ','.join('?' for _ in edge_types)
+                placeholders = ",".join("?" for _ in edge_types)
                 params = [rid] + edge_types
-                edge_rows = db.execute(f"""
+                edge_rows = db.execute(
+                    f"""
                     SELECT e.relationship_type,
                            r.canonical_name as target_name,
                            (SELECT ev.event_type FROM events ev
@@ -267,7 +289,9 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
                       )
                     ORDER BY e.confidence DESC
                     LIMIT 1
-                """, params).fetchone()
+                """,
+                    params,
+                ).fetchone()
 
                 if edge_rows:
                     rel_type = edge_rows["relationship_type"]
@@ -295,7 +319,9 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
     # Remove suppressed items from watchlist, add to coverage queue
     active_watchlist = [i for i in active_watchlist if not i.get("_suppressed")]
     # Prepend suppressed items to coverage queue (they have higher priority than pure coverage)
-    coverage_queue = [i for i in suppressed_items if i.get("coverage_monitor_priority", 0) > 0] + coverage_queue
+    coverage_queue = [
+        i for i in suppressed_items if i.get("coverage_monitor_priority", 0) > 0
+    ] + coverage_queue
 
     # Recompute counts after enrichment/demotion
     active_watch_count = len(active_watchlist)
@@ -312,12 +338,14 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
         coverage_dist[cov] = coverage_dist.get(cov, 0) + 1
 
     # Also count total entities with scores in DB (honest disclosure — not just portfolio)
-    total_entities_scored = db.execute(
-        "SELECT COUNT(DISTINCT registry_id) FROM scores"
-    ).fetchone()[0]
+    total_entities_scored = db.execute("SELECT COUNT(DISTINCT registry_id) FROM scores").fetchone()[
+        0
+    ]
 
     # Events
-    total_events = db.execute("SELECT COUNT(*) FROM events WHERE active = 1 AND status = 'active'").fetchone()[0]
+    total_events = db.execute(
+        "SELECT COUNT(*) FROM events WHERE active = 1 AND status = 'active'"
+    ).fetchone()[0]
     events_24h = db.execute(
         "SELECT COUNT(*) FROM events WHERE active = 1 AND status = 'active' AND extracted_at > ?",
         ((now - timedelta(hours=24)).isoformat(),),
@@ -363,6 +391,7 @@ def collect_metrics(db: sqlite3.Connection) -> dict[str, Any]:
     classifier_yield = {}
     try:
         from kassandra.classifier import get_classifier_yield_report
+
         classifier_yield = get_classifier_yield_report(db)
     except Exception:
         pass
@@ -418,7 +447,7 @@ def _collect_resource() -> dict[str, Any]:
     try:
         # Process RSS (max resident set size in bytes)
         usage = _resource.getrusage(_resource.RUSAGE_SELF)
-        rss_mb = usage.ru_maxrss / (1024 * 1024) if hasattr(usage, 'ru_maxrss') else 0
+        rss_mb = usage.ru_maxrss / (1024 * 1024) if hasattr(usage, "ru_maxrss") else 0
         # On macOS, ru_maxrss is already in bytes (not KB like Linux)
         if rss_mb > 100000:  # absurdly high → probably in KB (Linux-style)
             rss_mb = rss_mb / 1024
@@ -428,7 +457,9 @@ def _collect_resource() -> dict[str, Any]:
         try:
             mp = subprocess.run(
                 ["sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             level_map = {"1": "normal", "2": "warning", "4": "critical"}
             mem_pressure = level_map.get(mp.stdout.strip(), mp.stdout.strip() or "normal")
@@ -440,10 +471,13 @@ def _collect_resource() -> dict[str, Any]:
         try:
             sw = subprocess.run(
                 ["sysctl", "-n", "vm.swapusage"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             # Output: "total = 1024.0M  used = 512.0M  free = 512.0M"
             import re
+
             match = re.search(r"used\s*=\s*([\d.]+)([MG])", sw.stdout)
             if match:
                 val = float(match.group(1))
@@ -499,6 +533,7 @@ def _dir_size(path: str | Path) -> int:
 
 # ── GLEIF staleness ───────────────────────────────────────────────────────────
 
+
 def _get_gleif_staleness(db: sqlite3.Connection) -> dict[str, Any]:
     """Check whether GLEIF enrichment is stale.
 
@@ -509,7 +544,6 @@ def _get_gleif_staleness(db: sqlite3.Connection) -> dict[str, Any]:
 
     Returns dict with: last_refresh, days_since_refresh, overdue, refresh_reason.
     """
-    from datetime import timedelta
 
     # Find the most recent successfully enriched entity. resolved_at is the
     # canonical registry timestamp; updated_at catches post-resolution GLEIF
@@ -535,7 +569,7 @@ def _get_gleif_staleness(db: sqlite3.Connection) -> dict[str, Any]:
     # Also check the most recent edge addition (new edges may bring new entities)
     last_edge = db.execute("SELECT MAX(created_at) FROM edges").fetchone()[0]
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     stale_days = 30  # Default interval
 
     result = {
@@ -560,7 +594,7 @@ def _get_gleif_staleness(db: sqlite3.Connection) -> dict[str, Any]:
         else:
             last_refresh_dt = last_enriched
         if last_refresh_dt.tzinfo is None:
-            last_refresh_dt = last_refresh_dt.replace(tzinfo=timezone.utc)
+            last_refresh_dt = last_refresh_dt.replace(tzinfo=UTC)
         days_since = (now - last_refresh_dt).days
         result["days_since_refresh"] = days_since
     except (ValueError, TypeError):
@@ -589,10 +623,11 @@ def _get_gleif_staleness(db: sqlite3.Connection) -> dict[str, Any]:
 
 # ── Consistency checks ───────────────────────────────────────────────────────
 
+
 def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
     """Run all data-integrity checks. Returns findings."""
     findings: list[dict[str, Any]] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # 1. Foreign-key integrity
     try:
@@ -602,11 +637,13 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
                OR target_registry_id NOT IN (SELECT id FROM registry)
         """).fetchone()[0]
         if orphan_edges > 0:
-            findings.append({
-                "severity": "P0",
-                "check": "fk_edges_registry",
-                "detail": f"{orphan_edges} edges reference missing registry entries",
-            })
+            findings.append(
+                {
+                    "severity": "P0",
+                    "check": "fk_edges_registry",
+                    "detail": f"{orphan_edges} edges reference missing registry entries",
+                }
+            )
     except Exception as e:
         findings.append({"severity": "P0", "check": "fk_edges_registry", "error": str(e)})
 
@@ -616,11 +653,13 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
             WHERE evidence_id NOT IN (SELECT id FROM evidence)
         """).fetchone()[0]
         if orphan_evidence > 0:
-            findings.append({
-                "severity": "P0",
-                "check": "fk_edges_evidence",
-                "detail": f"{orphan_evidence} edges reference missing evidence",
-            })
+            findings.append(
+                {
+                    "severity": "P0",
+                    "check": "fk_edges_evidence",
+                    "detail": f"{orphan_evidence} edges reference missing evidence",
+                }
+            )
     except Exception as e:
         findings.append({"severity": "P0", "check": "fk_edges_evidence", "error": str(e)})
 
@@ -629,11 +668,13 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
         "SELECT COUNT(*) FROM edges WHERE edge_source IS NULL"
     ).fetchone()[0]
     if null_source_edges > 0:
-        findings.append({
-            "severity": "P1",
-            "check": "edge_provenance",
-            "detail": f"{null_source_edges} edges have no edge_source",
-        })
+        findings.append(
+            {
+                "severity": "P1",
+                "check": "edge_provenance",
+                "detail": f"{null_source_edges} edges have no edge_source",
+            }
+        )
 
     # 3. Impossible timestamps — flag records more than 24h ahead of wall clock.
     # Median-relative checks produced false P1s after several days of normal score
@@ -646,25 +687,28 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
     ).fetchone()[0]
 
     if future_edges > 0:
-        findings.append({
-            "severity": "P1",
-            "check": "future_timestamps",
-            "detail": f"{future_edges} edges have created_at >24h past DB median",
-        })
+        findings.append(
+            {
+                "severity": "P1",
+                "check": "future_timestamps",
+                "detail": f"{future_edges} edges have created_at >24h past DB median",
+            }
+        )
 
     # Same for scores — compare against wall clock
-    score_max = db.execute("SELECT MAX(computed_at) FROM scores").fetchone()[0]
     future_scores = db.execute(
         "SELECT COUNT(*) FROM scores WHERE julianday(computed_at) > julianday(?) + 1",
         (now.isoformat(),),
     ).fetchone()[0]
 
     if future_scores > 0:
-        findings.append({
-            "severity": "P1",
-            "check": "future_timestamps_scores",
-            "detail": f"{future_scores} scores have computed_at >24h past median",
-        })
+        findings.append(
+            {
+                "severity": "P1",
+                "check": "future_timestamps_scores",
+                "detail": f"{future_scores} scores have computed_at >24h past median",
+            }
+        )
 
     # 4. Duplicate edges (same source/target/type with different evidence — suspicious)
     dup_edges = db.execute("""
@@ -675,11 +719,13 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
         LIMIT 20
     """).fetchall()
     if dup_edges:
-        findings.append({
-            "severity": "P2",
-            "check": "duplicate_edges",
-            "detail": f"{len(dup_edges)} groups of duplicate edges",
-        })
+        findings.append(
+            {
+                "severity": "P2",
+                "check": "duplicate_edges",
+                "detail": f"{len(dup_edges)} groups of duplicate edges",
+            }
+        )
 
     # 5. Scores based on stale inputs — any score computed before last non-future edge?
     max_edge = db.execute("SELECT MAX(created_at) FROM edges").fetchone()[0]
@@ -699,11 +745,13 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
             last_valid_edge = row[0]
     last_score = db.execute("SELECT MAX(computed_at) FROM scores").fetchone()[0]
     if last_valid_edge and last_score and last_valid_edge > last_score:
-        findings.append({
-            "severity": "P1",
-            "check": "stale_scores",
-            "detail": f"Last edge ({last_valid_edge}) after last score ({last_score})",
-        })
+        findings.append(
+            {
+                "severity": "P1",
+                "check": "stale_scores",
+                "detail": f"Last edge ({last_valid_edge}) after last score ({last_score})",
+            }
+        )
 
     # 6. Unexpected graph growth (>20% edges added in one cycle)
     # Tracked across cycles by the soak state; skip on first cycle.
@@ -713,25 +761,32 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
     findings.extend(secret_findings)
 
     # 8. NULL evidence_id on edges (should be impossible with NOT NULL)
-    null_evidence = db.execute(
-        "SELECT COUNT(*) FROM edges WHERE evidence_id IS NULL"
-    ).fetchone()[0]
+    null_evidence = db.execute("SELECT COUNT(*) FROM edges WHERE evidence_id IS NULL").fetchone()[0]
     if null_evidence > 0:
-        findings.append({
-            "severity": "P0",
-            "check": "null_evidence_id",
-            "detail": f"{null_evidence} edges have NULL evidence_id",
-        })
+        findings.append(
+            {
+                "severity": "P0",
+                "check": "null_evidence_id",
+                "detail": f"{null_evidence} edges have NULL evidence_id",
+            }
+        )
 
     # 9. Digest reconciliation — events_24h should match events_by_source sum
     try:
-        eb_sum = sum((db.execute("""
+        eb_sum = sum(
+            (
+                db.execute("""
             SELECT COUNT(*) FROM events e
             JOIN evidence ev ON e.evidence_id = ev.id
             WHERE e.active = 1 AND e.status = 'active'
             GROUP BY ev.extraction_method
-        """).fetchall() or [(0,)])[0])
-        events_total = db.execute("SELECT COUNT(*) FROM events WHERE active = 1 AND status = 'active'").fetchone()[0]
+        """).fetchall()
+                or [(0,)]
+            )[0]
+        )
+        events_total = db.execute(
+            "SELECT COUNT(*) FROM events WHERE active = 1 AND status = 'active'"
+        ).fetchone()[0]
         if eb_sum != events_total:
             # This is informational — some events may have no evidence link
             pass
@@ -744,25 +799,28 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
         WHERE documents_discovered < new_documents
     """).fetchone()[0]
     if neg_diff > 0:
-        findings.append({
-            "severity": "P1",
-            "check": "source_run_reconciliation",
-            "detail": f"{neg_diff} source_runs have new_documents > documents_discovered",
-        })
+        findings.append(
+            {
+                "severity": "P1",
+                "check": "source_run_reconciliation",
+                "detail": f"{neg_diff} source_runs have new_documents > documents_discovered",
+            }
+        )
 
     # 11. GLEIF staleness check
-    from datetime import timedelta
     gleif_state = _get_gleif_staleness(db)
     if gleif_state.get("overdue"):
-        findings.append({
-            "severity": "P1",
-            "check": "gleif_staleness",
-            "detail": (
-                f"GLEIF last refreshed {gleif_state.get('last_refresh', 'never')}. "
-                f"Refresh overdue by {gleif_state.get('days_overdue', '?')} days. "
-                f"Reason: {gleif_state.get('refresh_reason', 'unknown')}"
-            ),
-        })
+        findings.append(
+            {
+                "severity": "P1",
+                "check": "gleif_staleness",
+                "detail": (
+                    f"GLEIF last refreshed {gleif_state.get('last_refresh', 'never')}. "
+                    f"Refresh overdue by {gleif_state.get('days_overdue', '?')} days. "
+                    f"Reason: {gleif_state.get('refresh_reason', 'unknown')}"
+                ),
+            }
+        )
 
     # 12. Scheduled-source freshness: historical rows cannot satisfy the SLA.
     findings.extend(_source_freshness_findings(db))
@@ -792,32 +850,52 @@ def _scan_for_secrets() -> list[dict[str, Any]]:
     try:
         # Search for common secret patterns but exclude URLs and XML namespaces
         result = subprocess.run(
-            ["git", "-C", str(Path(__file__).resolve().parent.parent.parent),
-             "grep", "-n", "-I", "-E",
-             r"(sk-[a-zA-Z0-9]{20,}|api_key\s*=\s*['\"][A-Za-z0-9_\-]{12,}['\"]"
-             r"|secret\s*=\s*['\"][A-Za-z0-9_\-]{12,}['\"]"
-             r"|password\s*=\s*['\"][^'\"]{4,}['\"]"
-             r"|token\s*=\s*['\"][A-Za-z0-9_\-\.]{12,}['\"])"],
-            capture_output=True, text=True, timeout=10,
+            [
+                "git",
+                "-C",
+                str(Path(__file__).resolve().parent.parent.parent),
+                "grep",
+                "-n",
+                "-I",
+                "-E",
+                r"(sk-[a-zA-Z0-9]{20,}|api_key\s*=\s*['\"][A-Za-z0-9_\-]{12,}['\"]"
+                r"|secret\s*=\s*['\"][A-Za-z0-9_\-]{12,}['\"]"
+                r"|password\s*=\s*['\"][^'\"]{4,}['\"]"
+                r"|token\s*=\s*['\"][A-Za-z0-9_\-\.]{12,}['\"])",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         for line in result.stdout.splitlines():
             if not line:
                 continue
             # Skip false positives: URLs, XML namespaces, test fixtures, example files
-            if any(skip in line for skip in [
-                ".env.example", "test_", "fixture", "http://", "https://",
-                "xmlns", "schema/", "example.com",
-            ]):
+            if any(
+                skip in line
+                for skip in [
+                    ".env.example",
+                    "test_",
+                    "fixture",
+                    "http://",
+                    "https://",
+                    "xmlns",
+                    "schema/",
+                    "example.com",
+                ]
+            ):
                 continue
             # Skip lines that are clearly URLs or XML
             path_part = line.split(":", 1)[0] if ":" in line else ""
             if any(path_part.endswith(ext) for ext in [".xml"]):
                 continue
-            findings.append({
-                "severity": "P0",
-                "check": "secret_leakage",
-                "detail": f"Potential secret in repo: {line[:120]}",
-            })
+            findings.append(
+                {
+                    "severity": "P0",
+                    "check": "secret_leakage",
+                    "detail": f"Potential secret in repo: {line[:120]}",
+                }
+            )
     except Exception:
         pass
 
@@ -825,6 +903,7 @@ def _scan_for_secrets() -> list[dict[str, Any]]:
 
 
 # ── Digest generation ────────────────────────────────────────────────────────
+
 
 def _shorten(text: str | None, limit: int = 160) -> str:
     """Collapse whitespace and truncate text for Markdown-friendly alerts/digests."""
@@ -834,6 +913,7 @@ def _shorten(text: str | None, limit: int = 160) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[: max(0, limit - 1)].rstrip() + "…"
+
 
 def generate_digest(
     metrics: dict[str, Any],
@@ -860,8 +940,6 @@ def generate_digest(
         "coverage_gap": "⚠ Incomplete coverage",
         "no_signal": "○ No signal",
     }
-    rd = s.get("reason_distribution", {})
-
     lines = [
         "## 📊 Kassandra Daily Credit Brief",
         f"*Cycle #{state['cycles_completed']} | {m['collected_at'][:19].replace('T', ' ')}*",
@@ -877,10 +955,12 @@ def generate_digest(
 
     if active_watch_count == 0:
         lines.append("**No active credit watch items today.**")
-        lines.append(f"*0 direct adverse signals. 0 dependency-linked transmission signals.*")
+        lines.append("*0 direct adverse signals. 0 dependency-linked transmission signals.*")
     else:
-        lines.append(f"*{active_watch_count} active watch items "
-                     f"({direct_watch_count} direct, {transmission_watch_count} transmission)*")
+        lines.append(
+            f"*{active_watch_count} active watch items "
+            f"({direct_watch_count} direct, {transmission_watch_count} transmission)*"
+        )
         lines.append("")
         for item in active_watchlist[:10]:
             name = item.get("company_name", "Unknown")
@@ -892,11 +972,11 @@ def generate_digest(
             lines.append(f"#### {name} — watch: {wpri:.3f}")
 
             # Trigger details
-            trigger_type = item.get('trigger_event_type', 'unknown')
-            trigger_sev = item.get('trigger_severity', '?')
-            trigger_conf = item.get('trigger_confidence', '?')
-            trigger_date = item.get('trigger_date', '?')
-            trigger_entity = item.get('trigger_entity', name)
+            trigger_type = item.get("trigger_event_type", "unknown")
+            trigger_sev = item.get("trigger_severity", "?")
+            trigger_conf = item.get("trigger_confidence", "?")
+            trigger_date = item.get("trigger_date", "?")
+            trigger_entity = item.get("trigger_entity", name)
 
             if is_direct:
                 trigger_desc = _shorten(item.get("trigger_description", ""), 160)
@@ -914,25 +994,29 @@ def generate_digest(
                 lines.append(f"- ↗ Transmission: {trigger_entity[:40]} has {trigger_type}")
 
             # Dependency path
-            dep_path = item.get('dependency_path', '')
+            dep_path = item.get("dependency_path", "")
             if dep_path:
                 lines.append(f"- Path: {dep_path}")
 
             # Evidence
-            ev_ids = item.get('evidence_ids', '')
+            ev_ids = item.get("evidence_ids", "")
             if ev_ids:
                 lines.append(f"- Evidence: {ev_ids}")
 
-            lines.append(f"- Action: {'Review direct evidence' if is_direct else 'Verify dependency exposure'}")
+            lines.append(
+                f"- Action: {'Review direct evidence' if is_direct else 'Verify dependency exposure'}"
+            )
             lines.append("")
 
     # ── Section 2: Coverage / Enrichment Queue ──
-    lines.extend([
-        "",
-        "### 2. 📋 Coverage / Enrichment Queue",
-        "*Not credit alerts — data quality and monitoring coverage tasks.*",
-        "",
-    ])
+    lines.extend(
+        [
+            "",
+            "### 2. 📋 Coverage / Enrichment Queue",
+            "*Not credit alerts — data quality and monitoring coverage tasks.*",
+            "",
+        ]
+    )
     coverage_queue = s.get("coverage_queue", [])
     if not coverage_queue:
         lines.append("**No coverage tasks queued.**")
@@ -942,14 +1026,18 @@ def generate_digest(
             cmpri = item.get("coverage_monitor_priority", 0)
             reason = item.get("priority_reason", "no_signal")
             gap = reason_labels.get(reason, reason)
-            lines.append(f"- **{name}**: coverage_monitor_priority={cmpri:.3f}, reason={reason}, gap={gap}")
+            lines.append(
+                f"- **{name}**: coverage_monitor_priority={cmpri:.3f}, reason={reason}, gap={gap}"
+            )
         lines.append("")
 
     # ── Section 3: Evidence This Cycle ──
-    lines.extend([
-        "",
-        "### 3. 📥 Evidence This Cycle",
-    ])
+    lines.extend(
+        [
+            "",
+            "### 3. 📥 Evidence This Cycle",
+        ]
+    )
     ec = d.get("evidence_this_cycle", {})
     ep = d.get("evidence_processed_this_cycle", {})
     if ec or ep:
@@ -965,21 +1053,25 @@ def generate_digest(
         lines.append("*No new evidence this cycle.*")
 
     # ── Section 4: Source & Classifier Health ──
-    lines.extend([
-        "",
-        "### 4. 🔍 Source & Classifier Health",
-    ])
+    lines.extend(
+        [
+            "",
+            "### 4. 🔍 Source & Classifier Health",
+        ]
+    )
     # Source yield — reconciled: events from DB (not source_runs, which may be stale)
     # Map granular event sources (uk_gazette_feed, web_monitor_homepage) to coarse keys
     events_by_source = d.get("events_by_source", {})
+
     def _events_for_source(source_key):
         total = 0
         for ek, ec in events_by_source.items():
             if ek.startswith(source_key) or source_key.startswith(ek):
                 total += ec
         return total
+
     for src_name, src_stats in sorted(m.get("sources", {}).items()):
-        actual_events = _events_for_source(src_name) or src_stats.get('events_found', 0)
+        actual_events = _events_for_source(src_name) or src_stats.get("events_found", 0)
         lines.append(
             f"  • **{src_name}**: {src_stats['runs']} runs, "
             f"{src_stats['new_evidence']} docs, "
@@ -1000,40 +1092,43 @@ def generate_digest(
             yield_pct = yd.get("yield_rate_pct")
             yield_str = f" ({yield_pct}% yield)" if yield_pct is not None else ""
             lines.append(
-                f"  • {src_name}: {docs} docs, {classified} classified, "
-                f"{events} events{yield_str}"
+                f"  • {src_name}: {docs} docs, {classified} classified, {events} events{yield_str}"
             )
         overall_yield = classifier_yield.get("overall_yield_rate_pct")
         if overall_yield is not None:
-            lines.append(
-                f"  *Overall classifier yield: {overall_yield}%*"
-            )
+            lines.append(f"  *Overall classifier yield: {overall_yield}%*")
 
     # Events with source breakdown
     eb = d.get("events_by_source", {})
     event_parts = []
     for src, count in sorted(eb.items(), key=lambda x: -x[1])[:5]:
         event_parts.append(f"  • {src}: {count}")
-    lines.extend([
-        "",
-        f"**Events:** {d['total_events']} total | {d['events_24h']} in last 24h",
-    ])
+    lines.extend(
+        [
+            "",
+            f"**Events:** {d['total_events']} total | {d['events_24h']} in last 24h",
+        ]
+    )
     if event_parts:
         lines.extend(event_parts)
 
     # Score summary
-    lines.extend([
-        "",
-        f"**Scores:** {s['portfolio_scored']}/{s['portfolio_companies']} portfolio companies scored | "
-        f"mean priority {s['mean_priority']:.3f} | max {s['max_priority']:.3f}",
-        f"*({s['total_entities_with_scores']} total entities with scores in DB)*",
-    ])
+    lines.extend(
+        [
+            "",
+            f"**Scores:** {s['portfolio_scored']}/{s['portfolio_companies']} portfolio companies scored | "
+            f"mean priority {s['mean_priority']:.3f} | max {s['max_priority']:.3f}",
+            f"*({s['total_entities_with_scores']} total entities with scores in DB)*",
+        ]
+    )
 
     # Graph summary
-    lines.extend([
-        "",
-        f"**Graph:** {d['total_edges']} edges | {d['total_registry']} entities | {d['total_evidence']} evidence items",
-    ])
+    lines.extend(
+        [
+            "",
+            f"**Graph:** {d['total_edges']} edges | {d['total_registry']} entities | {d['total_evidence']} evidence items",
+        ]
+    )
     edge_parts = []
     for source, count in sorted(d["edge_counts"].items(), key=lambda x: -x[1])[:5]:
         edge_parts.append(f"  • {source}: {count}")
@@ -1041,34 +1136,40 @@ def generate_digest(
         lines.append("\n".join(edge_parts))
 
     # ── Section 5: Integrity & Soak Health ──
-    lines.extend([
-        "",
-        "### 5. 🔐 Integrity & Soak Health",
-        f"**Cycle duration:** {cycle_duration_s:.1f}s | "
-        f"**Uptime:** {state['cycles_completed']} cycles since {state['started_at'][:10]}",
-        f"*{c['p0_count']} P0 | {c['p1_count']} P1 | {c['p2_count']} P2*",
-    ])
+    lines.extend(
+        [
+            "",
+            "### 5. 🔐 Integrity & Soak Health",
+            f"**Cycle duration:** {cycle_duration_s:.1f}s | "
+            f"**Uptime:** {state['cycles_completed']} cycles since {state['started_at'][:10]}",
+            f"*{c['p0_count']} P0 | {c['p1_count']} P1 | {c['p2_count']} P2*",
+        ]
+    )
     if c["findings"]:
         for f in c["findings"][:5]:
-            lines.append(f"  • [{f['severity']}] {f['check']}: {f.get('detail', f.get('error', 'unknown'))}")
+            lines.append(
+                f"  • [{f['severity']}] {f['check']}: {f.get('detail', f.get('error', 'unknown'))}"
+            )
     else:
         lines.append("  • No integrity findings.")
 
-    lines.extend([
-        "",
-        f"**Storage:** DB {m['storage']['db_bytes']/1024/1024:.1f} MB | Evidence {m['storage']['evidence_dir_bytes']/1024/1024:.1f} MB",
-        "",
-        f"**Resources:** Load {r['load_1m']}/{r['load_5m']}/{r['load_15m']} | "
-        f"RSS {r['process_rss_mb']:.0f} MB | "
-        f"Pressure {r['memory_pressure']} | "
-        f"Swap {r['swap_used_mb']:.0f} MB | "
-        f"Disk {r['disk_used_pct']}%",
-        "",
-        f"*Defects fixed this cycle: {defects_fixed_this_cycle}*",
-        "",
-        "---",
-        f"*Next cycle: ~24h. Autonomous soak mode.*",
-    ])
+    lines.extend(
+        [
+            "",
+            f"**Storage:** DB {m['storage']['db_bytes'] / 1024 / 1024:.1f} MB | Evidence {m['storage']['evidence_dir_bytes'] / 1024 / 1024:.1f} MB",
+            "",
+            f"**Resources:** Load {r['load_1m']}/{r['load_5m']}/{r['load_15m']} | "
+            f"RSS {r['process_rss_mb']:.0f} MB | "
+            f"Pressure {r['memory_pressure']} | "
+            f"Swap {r['swap_used_mb']:.0f} MB | "
+            f"Disk {r['disk_used_pct']}%",
+            "",
+            f"*Defects fixed this cycle: {defects_fixed_this_cycle}*",
+            "",
+            "---",
+            "*Next cycle: ~24h. Autonomous soak mode.*",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -1087,6 +1188,7 @@ def _acquire_cycle_lock() -> bool:
     Uses O_CREAT|O_EXCL for atomicity — works across processes.
     """
     import os as _os
+
     try:
         fd = _os.open(str(CYCLE_LOCK_PATH), _os.O_CREAT | _os.O_EXCL | _os.O_WRONLY)
         _os.write(fd, str(_os.getpid()).encode())
@@ -1099,6 +1201,7 @@ def _acquire_cycle_lock() -> bool:
 def _release_cycle_lock() -> None:
     """Release the soak cycle lock. Safe to call even if lock wasn't held."""
     import os as _os
+
     try:
         _os.unlink(str(CYCLE_LOCK_PATH))
     except FileNotFoundError:
@@ -1126,7 +1229,9 @@ with open(WEBLOCK_PATH, "w") as lock_file:
 
 def _build_web_monitor_command() -> list[str]:
     """Build the web monitor subprocess command with timeout and lock handling."""
-    script = _web_monitor_lock_script() + """try:
+    script = (
+        _web_monitor_lock_script()
+        + """try:
     from kassandra.collector import run_collection
     from kassandra.db import get_db, migrate
     db = get_db()
@@ -1141,6 +1246,7 @@ finally:
     except FileNotFoundError:
         pass
 """
+    )
     return [sys.executable, "-c", script]
 
 
@@ -1167,39 +1273,54 @@ def _dispatch_web_monitor(timeout_seconds: int = 900, db: sqlite3.Connection | N
             except OSError:
                 pass
 
-    started = datetime.now(timezone.utc).isoformat()
+    started = datetime.now(UTC).isoformat()
     run_id = f"web-monitor-supervised-{uuid.uuid4().hex}"
-    result = {"run_id": run_id, "status": "failed", "exit_code": None,
-              "stdout": "", "stderr": "", "started_at": started,
-              "completed_at": None}
+    result = {
+        "run_id": run_id,
+        "status": "failed",
+        "exit_code": None,
+        "stdout": "",
+        "stderr": "",
+        "started_at": started,
+        "completed_at": None,
+    }
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         child = subprocess.Popen(
             _build_web_monitor_command(),
             cwd=str(Path(__file__).resolve().parent.parent.parent),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         try:
             stdout, stderr = child.communicate(timeout=timeout_seconds)
-            result.update(stdout=stdout, stderr=stderr, exit_code=child.returncode,
-                          status="success" if child.returncode == 0 else "failed")
+            result.update(
+                stdout=stdout,
+                stderr=stderr,
+                exit_code=child.returncode,
+                status="success" if child.returncode == 0 else "failed",
+            )
         except subprocess.TimeoutExpired:
             child.kill()
             try:
                 stdout, stderr = child.communicate()
             except subprocess.TimeoutExpired:
                 stdout, stderr = "", ""
-            result.update(stdout=stdout, stderr=stderr, status="timeout",
-                          exit_code=child.returncode)
+            result.update(
+                stdout=stdout, stderr=stderr, status="timeout", exit_code=child.returncode
+            )
     except Exception as exc:
         result["stderr"] = str(exc)
     finally:
-        result["completed_at"] = datetime.now(timezone.utc).isoformat()
+        result["completed_at"] = datetime.now(UTC).isoformat()
         if db is not None and result["status"] != "success":
             detail = {
                 "type": result["status"],
                 "exit_code": result["exit_code"],
-                "message": (result["stderr"] or result["stdout"] or "web monitor child failed")[-4000:],
+                "message": (result["stderr"] or result["stdout"] or "web monitor child failed")[
+                    -4000:
+                ],
             }
             columns = {row[1] for row in db.execute("PRAGMA table_info(source_runs)")}
             detail_column = ", error_detail_json" if "error_detail_json" in columns else ""
@@ -1224,68 +1345,86 @@ def _dispatch_web_monitor(timeout_seconds: int = 900, db: sqlite3.Connection | N
 
 # Sources automated either by the daily soak or the 15-minute alert cycle.
 SCHEDULED_SOURCES = (
-    "companies_house", "uk_gazette", "web_monitor",
-    "bodacc_fr", "borme_es",
+    "companies_house",
+    "uk_gazette",
+    "web_monitor",
+    "bodacc_fr",
+    "borme_es",
 )
 MANUAL_ONLY_SOURCES = ("handelsregister_de",)
 SOURCE_FRESHNESS_SLA_HOURS = 26
 
 
 def evaluate_source_freshness(
-    db: sqlite3.Connection, *, now: datetime | None = None,
+    db: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
     sla_hours: int = SOURCE_FRESHNESS_SLA_HOURS,
     scheduled_sources: tuple[str, ...] = SCHEDULED_SOURCES,
 ) -> dict[str, dict[str, Any]]:
     """Evaluate the latest completed run for every intentionally scheduled source."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     result = {}
     for source in scheduled_sources:
         columns = {row[1] for row in db.execute("PRAGMA table_info(source_runs)")}
         status_column = "status" if "status" in columns else "'success'"
         row = db.execute(
             f"""SELECT completed_at, {status_column} FROM source_runs
-               WHERE source_name=? ORDER BY completed_at DESC LIMIT 1""", (source,)
+               WHERE source_name=? ORDER BY completed_at DESC LIMIT 1""",
+            (source,),
         ).fetchone()
         if not row:
             result[source] = {"healthy": False, "reason": "never_run", "completed_at": None}
             continue
         status = row[1] or "success"
         if status != "success":
-            result[source] = {"healthy": False, "reason": "failed", "status": status,
-                              "completed_at": row[0]}
+            result[source] = {
+                "healthy": False,
+                "reason": "failed",
+                "status": status,
+                "completed_at": row[0],
+            }
             continue
         try:
             completed = datetime.fromisoformat(row[0].replace("Z", "+00:00"))
             if completed.tzinfo is None:
-                completed = completed.replace(tzinfo=timezone.utc)
+                completed = completed.replace(tzinfo=UTC)
             age_hours = (now - completed).total_seconds() / 3600
         except (AttributeError, ValueError, TypeError):
             age_hours = float("inf")
         healthy = age_hours <= sla_hours
-        result[source] = {"healthy": healthy, "reason": "ok" if healthy else "stale",
-                          "age_hours": round(age_hours, 2), "completed_at": row[0]}
+        result[source] = {
+            "healthy": healthy,
+            "reason": "ok" if healthy else "stale",
+            "age_hours": round(age_hours, 2),
+            "completed_at": row[0],
+        }
     return result
 
 
 def _source_freshness_findings(db: sqlite3.Connection) -> list[dict[str, str]]:
     return [
-        {"severity": "P1", "check": "source_freshness",
-         "detail": f"{source}: {info['reason']} (latest={info.get('completed_at')})"}
+        {
+            "severity": "P1",
+            "check": "source_freshness",
+            "detail": f"{source}: {info['reason']} (latest={info.get('completed_at')})",
+        }
         for source, info in evaluate_source_freshness(db).items()
         if not info["healthy"]
     ]
 
 
 def run_semantic_health_checks(
-    db: sqlite3.Connection, *, now: datetime | None = None,
+    db: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
 ) -> list[dict[str, str]]:
     """Check queue ageing, source accounting, and per-company score freshness."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     findings: list[dict[str, str]] = []
     tables = {
-        row[0] for row in db.execute(
-            "SELECT name FROM sqlite_master WHERE type IN ('table','view')"
-        )
+        row[0]
+        for row in db.execute("SELECT name FROM sqlite_master WHERE type IN ('table','view')")
     }
 
     if "unconfirmed_match_queue" in tables:
@@ -1295,13 +1434,21 @@ def run_semantic_health_checks(
             (now.isoformat(),),
         ).fetchone()[0]
         if stale:
-            findings.append({
-                "severity": "P2", "check": "stale_unconfirmed_matches",
-                "detail": f"{stale} pending entity matches are older than 7 days",
-            })
+            findings.append(
+                {
+                    "severity": "P2",
+                    "check": "stale_unconfirmed_matches",
+                    "detail": f"{stale} pending entity matches are older than 7 days",
+                }
+            )
 
     source_columns = {row[1] for row in db.execute("PRAGMA table_info(source_runs)")}
-    accounting = {"candidates_generated", "unconfirmed_matches", "events_created", "duplicate_events"}
+    accounting = {
+        "candidates_generated",
+        "unconfirmed_matches",
+        "events_created",
+        "duplicate_events",
+    }
     if accounting <= source_columns:
         bad = db.execute(
             """SELECT COUNT(*) FROM source_runs
@@ -1309,10 +1456,13 @@ def run_semantic_health_checks(
                    + COALESCE(duplicate_events,0) > COALESCE(candidates_generated,0)"""
         ).fetchone()[0]
         if bad:
-            findings.append({
-                "severity": "P1", "check": "candidate_reconciliation",
-                "detail": f"{bad} source runs account for more outcomes than classifier candidates",
-            })
+            findings.append(
+                {
+                    "severity": "P1",
+                    "check": "candidate_reconciliation",
+                    "detail": f"{bad} source runs account for more outcomes than classifier candidates",
+                }
+            )
 
     if {"scoreable_companies", "scores"} <= tables:
         missing = db.execute(
@@ -1320,10 +1470,13 @@ def run_semantic_health_checks(
                WHERE NOT EXISTS (SELECT 1 FROM scores s WHERE s.registry_id=sc.id)"""
         ).fetchone()[0]
         if missing:
-            findings.append({
-                "severity": "P1", "check": "missing_company_scores",
-                "detail": f"{missing} scoreable companies have no score snapshot",
-            })
+            findings.append(
+                {
+                    "severity": "P1",
+                    "check": "missing_company_scores",
+                    "detail": f"{missing} scoreable companies have no score snapshot",
+                }
+            )
         if "events" in tables:
             stale_scores = db.execute(
                 """SELECT COUNT(*) FROM scoreable_companies sc
@@ -1336,22 +1489,25 @@ def run_semantic_health_checks(
                    )"""
             ).fetchone()[0]
             if stale_scores:
-                findings.append({
-                    "severity": "P1", "check": "stale_company_scores",
-                    "detail": f"{stale_scores} companies have active events newer than their latest score",
-                })
+                findings.append(
+                    {
+                        "severity": "P1",
+                        "check": "stale_company_scores",
+                        "detail": f"{stale_scores} companies have active events newer than their latest score",
+                    }
+                )
     return findings
 
 
 def update_source_metric_state(
-    state: dict[str, Any], source_metrics: dict[str, dict[str, Any]],
+    state: dict[str, Any],
+    source_metrics: dict[str, dict[str, Any]],
 ) -> None:
     """Persist all-time snapshots and true period deltas without double-counting."""
     stored = state.setdefault("source_metrics", {})
     for source, current_raw in source_metrics.items():
         current = {
-            key: value for key, value in current_raw.items()
-            if isinstance(value, (int, float))
+            key: value for key, value in current_raw.items() if isinstance(value, (int, float))
         }
         previous_entry = stored.get(source, {})
         previous = previous_entry.get("all_time", {}) if isinstance(previous_entry, dict) else {}
@@ -1375,7 +1531,7 @@ def run_soak_cycle() -> dict[str, Any]:
     # ── Overlap guard ──
     if not _acquire_cycle_lock():
         return {
-            "cycle_start": datetime.now(timezone.utc).isoformat(),
+            "cycle_start": datetime.now(UTC).isoformat(),
             "failed": True,
             "skipped": "cycle_lock_held",
             "duration_seconds": 0,
@@ -1384,7 +1540,7 @@ def run_soak_cycle() -> dict[str, Any]:
 
     state = load_soak_state()
     cycle_result: dict[str, Any] = {
-        "cycle_start": datetime.now(timezone.utc).isoformat(),
+        "cycle_start": datetime.now(UTC).isoformat(),
         "steps": {},
     }
 
@@ -1395,8 +1551,11 @@ def run_soak_cycle() -> dict[str, Any]:
         # Step 1: Collect evidence from fast sources (Companies House, Gazette)
         try:
             from kassandra.collector import run_collection
+
             collect_results = run_collection(db, sources=["companies_house", "uk_gazette"])
-            cycle_result["steps"]["collect"] = {"sources": {k: v.to_dict() for k, v in collect_results.items()}}
+            cycle_result["steps"]["collect"] = {
+                "sources": {k: v.to_dict() for k, v in collect_results.items()}
+            }
         except Exception as e:
             logger.error("Collection failed: %s", e)
             cycle_result["steps"]["collect"] = {"error": str(e)}
@@ -1408,6 +1567,7 @@ def run_soak_cycle() -> dict[str, Any]:
         gleif_state = _get_gleif_staleness(db)
         if gleif_state.get("overdue"):
             from kassandra.graph_enrich import enrich_placeholders
+
             enriched = enrich_placeholders(db, max_enrich=100)
             cycle_result["steps"]["enrich"] = {
                 "gleif_staleness": gleif_state,
@@ -1423,6 +1583,7 @@ def run_soak_cycle() -> dict[str, Any]:
         # Step 3: Score
         try:
             from kassandra.scoring import compute_scores
+
             scores = compute_scores(db)
             cycle_result["steps"]["score"] = {"companies_scored": len(scores)}
         except Exception as e:
@@ -1458,21 +1619,25 @@ def run_soak_cycle() -> dict[str, Any]:
 
         # Step 7: Update soak state
         state["cycles_completed"] += 1
-        state["last_cycle_at"] = datetime.now(timezone.utc).isoformat()
+        state["last_cycle_at"] = datetime.now(UTC).isoformat()
         state["last_cycle_duration_seconds"] = round(duration, 1)
 
         if cycle_failed:
             state["cycles_failed"] += 1
             # Preserve diagnostic for root-cause analysis
             failed_step = next(
-                (k for k in ["collect", "score", "checks"]
-                 if cycle_result["steps"].get(k, {}).get("error")
-                 or (k == "checks" and cycle_result.get("checks", {}).get("p0_count", 0) > 0)),
+                (
+                    k
+                    for k in ["collect", "score", "checks"]
+                    if cycle_result["steps"].get(k, {}).get("error")
+                    or (k == "checks" and cycle_result.get("checks", {}).get("p0_count", 0) > 0)
+                ),
                 "unknown",
             )
             error_detail = (
                 cycle_result.get("checks", {}).get("findings", [{}])[0].get("detail", "")
-                if failed_step == "checks" and int(cycle_result["checks"].get("p0_count", 0) or 0) > 0
+                if failed_step == "checks"
+                and int(cycle_result["checks"].get("p0_count", 0) or 0) > 0
                 else str(cycle_result["steps"].get(failed_step, {}).get("error", "unknown"))
             )
             state["last_failure_diagnostic"] = {
@@ -1481,13 +1646,15 @@ def run_soak_cycle() -> dict[str, Any]:
                 "at": cycle_result["cycle_start"],
             }
             # Auto-file a defect so failures are visible in soak state
-            state.setdefault("defects_found", []).append({
-                "cycle": state["cycles_completed"] + 1,
-                "at": cycle_result["cycle_start"],
-                "step": failed_step,
-                "error": error_detail[:500],
-                "status": "open",
-            })
+            state.setdefault("defects_found", []).append(
+                {
+                    "cycle": state["cycles_completed"] + 1,
+                    "at": cycle_result["cycle_start"],
+                    "step": failed_step,
+                    "error": error_detail[:500],
+                    "status": "open",
+                }
+            )
             # Schedule next run normally — no busy-looping or exponential backoff
         else:
             # Clear any stale failure diagnostic on successful run
@@ -1495,22 +1662,26 @@ def run_soak_cycle() -> dict[str, Any]:
 
             # Append score history for volatility tracking
             if "metrics" in cycle_result and "scores" in cycle_result["metrics"]:
-                state.setdefault("score_history", []).append({
-                    "cycle": state["cycles_completed"],
-                    "at": cycle_result["cycle_start"],
-                    "mean_priority": cycle_result["metrics"]["scores"]["mean_priority"],
-                    "max_priority": cycle_result["metrics"]["scores"]["max_priority"],
-                })
+                state.setdefault("score_history", []).append(
+                    {
+                        "cycle": state["cycles_completed"],
+                        "at": cycle_result["cycle_start"],
+                        "mean_priority": cycle_result["metrics"]["scores"]["mean_priority"],
+                        "max_priority": cycle_result["metrics"]["scores"]["max_priority"],
+                    }
+                )
                 if len(state["score_history"]) > 90:
                     state["score_history"] = state["score_history"][-90:]
 
             # Append resource history
             if "metrics" in cycle_result and "resource" in cycle_result["metrics"]:
-                state.setdefault("resource_history", []).append({
-                    "cycle": state["cycles_completed"],
-                    "at": cycle_result["cycle_start"],
-                    **cycle_result["metrics"]["resource"],
-                })
+                state.setdefault("resource_history", []).append(
+                    {
+                        "cycle": state["cycles_completed"],
+                        "at": cycle_result["cycle_start"],
+                        **cycle_result["metrics"]["resource"],
+                    }
+                )
                 if len(state["resource_history"]) > 90:
                     state["resource_history"] = state["resource_history"][-90:]
 
@@ -1523,7 +1694,9 @@ def run_soak_cycle() -> dict[str, Any]:
 
         cycle_result["duration_seconds"] = round(duration, 1)
         cycle_result["failed"] = cycle_failed
-        if isinstance(cycle_result.get("metrics"), dict) and isinstance(cycle_result.get("checks"), dict):
+        if isinstance(cycle_result.get("metrics"), dict) and isinstance(
+            cycle_result.get("checks"), dict
+        ):
             cycle_result["digest"] = generate_digest(
                 cycle_result["metrics"],
                 cycle_result["checks"],

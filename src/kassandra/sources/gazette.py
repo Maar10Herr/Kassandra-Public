@@ -9,19 +9,21 @@ Sources:
 - Company-specific notices via search
 """
 
-import hashlib
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import feedparser
 import httpx
 
 from kassandra.contracts import CollectionMetrics, MatchResult
-from kassandra.config import get_config
-from kassandra.evidence import store_evidence, store_event
-from kassandra.sources.entity_resolution import exact_legal_name_match, queue_unconfirmed_match, discovery_overlap
+from kassandra.evidence import store_event, store_evidence
+from kassandra.sources.entity_resolution import (
+    discovery_overlap,
+    exact_legal_name_match,
+    queue_unconfirmed_match,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +32,32 @@ GAZETTE_SEARCH_URL = "https://www.thegazette.co.uk/notice/"
 
 
 LEGAL_SUFFIX_TOKENS = {
-    "ltd", "limited", "plc", "public", "company", "co", "ag", "se", "sa",
-    "nv", "bv", "gmbh", "sarl", "spa", "sas", "llc", "inc", "holdings",
-    "holding", "group", "the", "and", "of", "uk", "gb", "ireland",
+    "ltd",
+    "limited",
+    "plc",
+    "public",
+    "company",
+    "co",
+    "ag",
+    "se",
+    "sa",
+    "nv",
+    "bv",
+    "gmbh",
+    "sarl",
+    "spa",
+    "sas",
+    "llc",
+    "inc",
+    "holdings",
+    "holding",
+    "group",
+    "the",
+    "and",
+    "of",
+    "uk",
+    "gb",
+    "ireland",
 }
 
 
@@ -60,7 +85,6 @@ def _notice_matches_company(company_name: str, title: str, summary: str = "") ->
 
     notice_tokens = set(_normalise_tokens(f"{title} {summary}"))
     if len(company_tokens) == 1:
-        token = company_tokens[0]
         # Hyphenated brands like T-SYSTEMS should match the full collapsed brand
         # (tsystems), not any notice containing the generic word "systems".
         if "-" in company_name:
@@ -81,6 +105,7 @@ def _notice_matches_company(company_name: str, title: str, summary: str = "") ->
     # false positives are more damaging than missed Gazette feed matches; daily
     # broader web monitoring still provides a second chance.
     return set(company_tokens).issubset(notice_tokens)
+
 
 # ── Official-ID extraction and entity-resolution matching ─────────────────────
 
@@ -108,12 +133,40 @@ def _extract_official_id(title: str, summary: str = "") -> str | None:
 
 # Generic tokens that alone are never distinctive for Gazette context
 _GAZETTE_GENERIC_TOKENS: set[str] = {
-    "tech", "services", "group", "holding", "holdings", "international",
-    "uk", "gb", "ireland", "scotland", "england", "wales",
-    "solutions", "systems", "global", "trading", "capital", "management",
-    "company", "corp", "inc", "llc", "limited", "ltd", "plc",
-    "services", "property", "properties", "investments", "enterprises",
-    "associates", "partners", "consulting", "development",
+    "tech",
+    "services",
+    "group",
+    "holding",
+    "holdings",
+    "international",
+    "uk",
+    "gb",
+    "ireland",
+    "scotland",
+    "england",
+    "wales",
+    "solutions",
+    "systems",
+    "global",
+    "trading",
+    "capital",
+    "management",
+    "company",
+    "corp",
+    "inc",
+    "llc",
+    "limited",
+    "ltd",
+    "plc",
+    "services",
+    "property",
+    "properties",
+    "investments",
+    "enterprises",
+    "associates",
+    "partners",
+    "consulting",
+    "development",
 }
 
 
@@ -152,7 +205,16 @@ def _match_notice_to_registry(
     ch_number = row["companies_house_number"]  # may be None
 
     # Only match UK entities against Gazette data
-    uk_jurisdictions = {"GB", "UK", "ENGLAND-WALES", "ENGLAND", "WALES", "SCOTLAND", "NORTHERN-IRELAND", "NI"}
+    uk_jurisdictions = {
+        "GB",
+        "UK",
+        "ENGLAND-WALES",
+        "ENGLAND",
+        "WALES",
+        "SCOTLAND",
+        "NORTHERN-IRELAND",
+        "NI",
+    }
     if jurisdiction not in uk_jurisdictions:
         return MatchResult(
             status="rejected",
@@ -242,7 +304,7 @@ def _match_notice_to_registry(
     if matching == 0:
         return MatchResult(
             status="rejected",
-            reason=f"No distinctive token overlap",
+            reason="No distinctive token overlap",
             confidence=0.0,
         )
 
@@ -254,21 +316,29 @@ def _match_notice_to_registry(
     )
 
 
-
 # Patterns to classify Gazette notices
 INSOLVENCY_PATTERNS = {
     "insolvency": [
-        r"winding.?up", r"liquidation", r"insolven",
-        r"administration\s+order", r"creditors.*meeting",
-        r"petition.*wind", r"compulsory.*liquidat",
+        r"winding.?up",
+        r"liquidation",
+        r"insolven",
+        r"administration\s+order",
+        r"creditors.*meeting",
+        r"petition.*wind",
+        r"compulsory.*liquidat",
     ],
     "restructuring": [
-        r"administration(?!\s+order)", r"voluntary\s+arrangement",
-        r"cva\b", r"moratorium", r"restructuring",
+        r"administration(?!\s+order)",
+        r"voluntary\s+arrangement",
+        r"cva\b",
+        r"moratorium",
+        r"restructuring",
     ],
     "management_departure": [
-        r"resignation.*director", r"removal.*director",
-        r"appointment.*liquidator", r"appointment.*administrator",
+        r"resignation.*director",
+        r"removal.*director",
+        r"appointment.*liquidator",
+        r"appointment.*administrator",
     ],
 }
 
@@ -277,7 +347,7 @@ class GazetteClient:
     """UK Gazette insolvency notice monitor."""
 
     def __init__(self) -> None:
-        self._client = httpx.Client(timeout=30)
+        self._client = httpx.Client(timeout=30, trust_env=False, follow_redirects=False)
         self.last_error: Exception | None = None
 
     def fetch_insolvency_feed(self, max_entries: int = 50) -> list[dict[str, Any]]:
@@ -296,13 +366,15 @@ class GazetteClient:
                 return notices
 
             for entry in feed.entries[:max_entries]:
-                notices.append({
-                    "title": entry.get("title", ""),
-                    "link": entry.get("link", ""),
-                    "published": entry.get("published", ""),
-                    "summary": entry.get("summary", ""),
-                    "id": entry.get("id", ""),
-                })
+                notices.append(
+                    {
+                        "title": entry.get("title", ""),
+                        "link": entry.get("link", ""),
+                        "published": entry.get("published", ""),
+                        "summary": entry.get("summary", ""),
+                        "id": entry.get("id", ""),
+                    }
+                )
 
             logger.info(f"Fetched {len(notices)} Gazette insolvency notices")
         except httpx.HTTPError as e:
@@ -342,8 +414,9 @@ class GazetteClient:
         for notice in notices:
             title = notice.get("title", "")
             summary = notice.get("summary", "")
-            if (_extract_official_id(title, summary) or
-                    discovery_overlap(company_name, f"{title} {summary}", LEGAL_SUFFIX_TOKENS)):
+            if _extract_official_id(title, summary) or discovery_overlap(
+                company_name, f"{title} {summary}", LEGAL_SUFFIX_TOKENS
+            ):
                 matches.append(notice)
 
         return matches
@@ -377,8 +450,9 @@ class GazetteClient:
         for notice in notices:
             title = notice.get("title", "")
             summary = notice.get("summary", "")
-            if (_extract_official_id(title, summary) or
-                    discovery_overlap(company_name, f"{title} {summary}", LEGAL_SUFFIX_TOKENS)):
+            if _extract_official_id(title, summary) or discovery_overlap(
+                company_name, f"{title} {summary}", LEGAL_SUFFIX_TOKENS
+            ):
                 matches.append(notice)
         return matches
 
@@ -392,7 +466,7 @@ class GazetteClient:
         """Store notices and return reconciled evidence/event outcomes."""
         new_evidence = duplicates = candidates = unconfirmed = 0
         events_created = duplicate_events = 0
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         for notice in notices:
             match_result = _match_notice_to_registry(db, notice, company_name, registry_id)
@@ -401,10 +475,16 @@ class GazetteClient:
             candidates += 1
             content = f"Title: {notice['title']}\nLink: {notice['link']}\nPublished: {notice['published']}\nSummary: {notice['summary']}"
             ev_result = store_evidence(
-                db=db, content=content, source_url=notice["link"], retrieval_time=now,
-                publication_time=notice.get("published"), extraction_method="uk_gazette_feed",
-                parser_version="1.0.0", content_type="application/rss+xml",
-                excerpt=notice["title"][:500], source_reliability=1.0,
+                db=db,
+                content=content,
+                source_url=notice["link"],
+                retrieval_time=now,
+                publication_time=notice.get("published"),
+                extraction_method="uk_gazette_feed",
+                parser_version="1.0.0",
+                content_type="application/rss+xml",
+                excerpt=notice["title"][:500],
+                source_reliability=1.0,
             )
             evidence_id = ev_result.evidence_id
             if ev_result.is_new:
@@ -413,12 +493,19 @@ class GazetteClient:
                 duplicates += 1
 
             if match_result.is_confirmed:
-                event_type, severity = self.classify_notice(notice["title"], notice.get("summary", ""))
+                event_type, severity = self.classify_notice(
+                    notice["title"], notice.get("summary", "")
+                )
                 if event_type:
                     evt_result = store_event(
-                        db=db, evidence_id=evidence_id, registry_id=registry_id,
-                        event_type=event_type, severity=severity, confidence=0.9,
-                        description=notice["title"][:500], source_claims_directly=True,
+                        db=db,
+                        evidence_id=evidence_id,
+                        registry_id=registry_id,
+                        event_type=event_type,
+                        severity=severity,
+                        confidence=0.9,
+                        description=notice["title"][:500],
+                        source_claims_directly=True,
                     )
                     if evt_result.status == "inserted":
                         events_created += 1
@@ -427,10 +514,15 @@ class GazetteClient:
             elif match_result.is_unconfirmed_review_candidate:
                 # Count only newly queued work, not every rediscovery.
                 queued = queue_unconfirmed_match(
-                    db=db, source_name="uk_gazette", source_entity_name=notice.get("title", ""),
-                    candidate_registry_id=registry_id, candidate_registry_name=company_name,
-                    match_type=match_result.match_type, match_confidence=match_result.confidence,
-                    evidence_id=evidence_id, evidence_excerpt=notice.get("title", ""),
+                    db=db,
+                    source_name="uk_gazette",
+                    source_entity_name=notice.get("title", ""),
+                    candidate_registry_id=registry_id,
+                    candidate_registry_name=company_name,
+                    match_type=match_result.match_type,
+                    match_confidence=match_result.confidence,
+                    evidence_id=evidence_id,
+                    evidence_excerpt=notice.get("title", ""),
                     reason=match_result.reason,
                 )
                 unconfirmed += int(queued)
@@ -441,8 +533,14 @@ class GazetteClient:
                 )
 
         return CollectionMetrics(
-            run_id="", source_name="uk_gazette", discovered=len(notices),
-            fetched=new_evidence + duplicates, new_evidence=new_evidence, duplicates=duplicates,
-            candidates=candidates, unconfirmed=unconfirmed, events_created=events_created,
+            run_id="",
+            source_name="uk_gazette",
+            discovered=len(notices),
+            fetched=new_evidence + duplicates,
+            new_evidence=new_evidence,
+            duplicates=duplicates,
+            candidates=candidates,
+            unconfirmed=unconfirmed,
+            events_created=events_created,
             duplicate_events=duplicate_events,
         )

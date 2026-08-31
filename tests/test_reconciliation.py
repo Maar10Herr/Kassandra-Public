@@ -10,17 +10,14 @@ Verifies:
 """
 
 import json
-import sqlite3
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from kassandra.db import migrate, _connect
-from kassandra.contracts import EvidenceResult, EventResult, CollectionMetrics, MatchResult
-
+from kassandra.contracts import CollectionMetrics, EventResult, EvidenceResult
+from kassandra.db import _connect, migrate
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -108,14 +105,20 @@ class TestStoreEvidenceTypedResult:
         from kassandra.evidence import store_evidence
 
         result1 = store_evidence(
-            db=temp_db, content="content A",
-            source_url="https://a.com", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="content A",
+            source_url="https://a.com",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         result2 = store_evidence(
-            db=temp_db, content="content B",
-            source_url="https://b.com", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="content B",
+            source_url="https://b.com",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         assert result1.is_new is True
         assert result2.is_new is True
@@ -126,14 +129,20 @@ class TestStoreEvidenceTypedResult:
         from kassandra.evidence import store_evidence
 
         result1 = store_evidence(
-            db=temp_db, content="same content here",
-            source_url="https://site1.com/page", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="same content here",
+            source_url="https://site1.com/page",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         result2 = store_evidence(
-            db=temp_db, content="same content here",
-            source_url="https://site2.com/other", retrieval_time="2025-01-02T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="same content here",
+            source_url="https://site2.com/other",
+            retrieval_time="2025-01-02T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         assert result1.content_hash == result2.content_hash
         assert result1.evidence_id == result2.evidence_id
@@ -150,10 +159,14 @@ class TestStoreEventTypedResult:
     def _make_evidence(self, db, content="event data"):
         """Helper: store evidence and return evidence_id."""
         from kassandra.evidence import store_evidence
+
         result = store_evidence(
-            db=db, content=content,
-            source_url="https://example.com/event", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=db,
+            content=content,
+            source_url="https://example.com/event",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         return result.evidence_id
 
@@ -165,8 +178,11 @@ class TestStoreEventTypedResult:
         reg_id = _insert_registry(temp_db, "TestCo")
 
         result = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert isinstance(result, EventResult), f"Expected EventResult, got {type(result)}"
         assert result.event_id is not None
@@ -182,16 +198,22 @@ class TestStoreEventTypedResult:
         reg_id = _insert_registry(temp_db, "TestCo")
 
         result1 = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert result1.status == "inserted"
         assert result1.is_new is True
 
         # Same event again — must detect duplicate explicitly
         result2 = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert result2.status == "duplicate", f"Expected 'duplicate', got '{result2.status}'"
         assert result2.is_new is False
@@ -205,14 +227,20 @@ class TestStoreEventTypedResult:
         reg_id = _insert_registry(temp_db, "TestCo")
 
         result1 = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert result1.status == "inserted"
 
         result2 = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="restructuring", severity="high",
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="restructuring",
+            severity="high",
         )
         assert result2.status == "inserted"
         assert result2.event_id != result1.event_id
@@ -226,8 +254,11 @@ class TestStoreEventTypedResult:
 
         # store_event with empty/None event_type should be rejected
         result = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="", severity="low",
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="",
+            severity="low",
         )
         assert result.status == "rejected"
         assert result.is_new is False
@@ -242,8 +273,11 @@ class TestStoreEventTypedResult:
         reg_id = _insert_registry(temp_db, "TestCo")
 
         result = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="profit_warning", severity="medium",
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="profit_warning",
+            severity="medium",
         )
         assert result.status == "inserted"
 
@@ -264,15 +298,23 @@ class TestStoreEventTypedResult:
         reg_id = _insert_registry(temp_db, "TestCo")
 
         result1 = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical", confidence=0.95,
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
+            confidence=0.95,
         )
         original_id = result1.event_id
 
         # Replay — different confidence, same evidence+type+registry
         result2 = store_event(
-            db=temp_db, evidence_id=ev_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical", confidence=0.50,
+            db=temp_db,
+            evidence_id=ev_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
+            confidence=0.50,
         )
         assert result2.status == "duplicate"
         assert result2.event_id == original_id
@@ -287,8 +329,12 @@ class TestCollectionMetricsReconciliation:
     def test_fetched_plus_errors_covers_discovered(self):
         """fetched + errors must equal discovered (or discovered is an upper bound)."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            discovered=100, fetched=95, new_evidence=10, duplicates=85,
+            run_id="r1",
+            source_name="test",
+            discovered=100,
+            fetched=95,
+            new_evidence=10,
+            duplicates=85,
             errors=5,
         )
         assert m.fetched + m.errors == m.discovered
@@ -296,9 +342,13 @@ class TestCollectionMetricsReconciliation:
     def test_fetched_equals_new_plus_duplicates_plus_errors(self):
         """fetched must equal new_evidence + duplicates (+ errors for content that failed parse)."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            discovered=100, fetched=100,
-            new_evidence=20, duplicates=78, errors=2,
+            run_id="r1",
+            source_name="test",
+            discovered=100,
+            fetched=100,
+            new_evidence=20,
+            duplicates=78,
+            errors=2,
         )
         # 20 new + 78 dup = 98; 2 errors => 100 fetched
         assert m.new_evidence + m.duplicates + m.errors == m.fetched
@@ -306,23 +356,43 @@ class TestCollectionMetricsReconciliation:
     def test_events_created_plus_duplicate_events_lte_candidates(self):
         """events_created + duplicate_events <= candidates."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            candidates=10, events_created=5, duplicate_events=3,
+            run_id="r1",
+            source_name="test",
+            candidates=10,
+            events_created=5,
+            duplicate_events=3,
         )
         assert m.events_created + m.duplicate_events <= m.candidates
 
     def test_to_dict_all_fields_present(self):
         """to_dict() must include all fields for serialization."""
         m = CollectionMetrics(
-            run_id="r1", source_name="test",
-            discovered=10, fetched=10, new_evidence=5, duplicates=5,
-            candidates=3, unconfirmed=2, events_created=1, duplicate_events=1,
+            run_id="r1",
+            source_name="test",
+            discovered=10,
+            fetched=10,
+            new_evidence=5,
+            duplicates=5,
+            candidates=3,
+            unconfirmed=2,
+            events_created=1,
+            duplicate_events=1,
             errors=0,
         )
         d = m.to_dict()
-        for key in ["run_id", "source_name", "discovered", "fetched",
-                     "new_evidence", "duplicates", "candidates", "unconfirmed",
-                     "events_created", "duplicate_events", "errors"]:
+        for key in [
+            "run_id",
+            "source_name",
+            "discovered",
+            "fetched",
+            "new_evidence",
+            "duplicates",
+            "candidates",
+            "unconfirmed",
+            "events_created",
+            "duplicate_events",
+            "errors",
+        ]:
             assert key in d, f"Missing key '{key}' in to_dict()"
 
     def test_zero_values_accepted(self):
@@ -348,11 +418,13 @@ class TestSourceRunsReconciliation:
         return db.execute("SELECT COUNT(*) FROM evidence").fetchone()[0]
 
     def _count_unconfirmed(self, db) -> int:
-        return db.execute("SELECT COUNT(*) FROM unconfirmed_match_queue WHERE status='pending'").fetchone()[0]
+        return db.execute(
+            "SELECT COUNT(*) FROM unconfirmed_match_queue WHERE status='pending'"
+        ).fetchone()[0]
 
     def test_events_created_matches_active_delta(self, temp_db):
         """events_created in source_runs must equal actual delta of active events."""
-        from kassandra.evidence import store_evidence, store_event
+        from kassandra.evidence import store_event, store_evidence
 
         reg_id = _insert_registry(temp_db, "TestCo")
 
@@ -360,18 +432,27 @@ class TestSourceRunsReconciliation:
         events_before = self._count_active_events(temp_db)
 
         ev_result = store_evidence(
-            db=temp_db, content="initial event content",
-            source_url="https://src.com/1", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="initial event content",
+            source_url="https://src.com/1",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         result1 = store_event(
-            db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_result.evidence_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert result1.status == "inserted"
         result2 = store_event(
-            db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-            event_type="restructuring", severity="high",
+            db=temp_db,
+            evidence_id=ev_result.evidence_id,
+            registry_id=reg_id,
+            event_type="restructuring",
+            severity="high",
         )
         assert result2.status == "inserted"
 
@@ -383,14 +464,19 @@ class TestSourceRunsReconciliation:
         events_before_replay = self._count_active_events(temp_db)
 
         result1b = store_event(
-            db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-            event_type="insolvency", severity="critical",
+            db=temp_db,
+            evidence_id=ev_result.evidence_id,
+            registry_id=reg_id,
+            event_type="insolvency",
+            severity="critical",
         )
         assert result1b.status == "duplicate"
 
         events_after_replay = self._count_active_events(temp_db)
         replay_delta = events_after_replay - events_before_replay
-        assert replay_delta == 0, f"Replay must not increase active events, got delta={replay_delta}"
+        assert replay_delta == 0, (
+            f"Replay must not increase active events, got delta={replay_delta}"
+        )
 
     def test_new_evidence_no_event(self, temp_db):
         """Evidence that produces no events must still be counted in evidence, not events."""
@@ -401,9 +487,12 @@ class TestSourceRunsReconciliation:
 
         # Store evidence with no associated event
         result = store_evidence(
-            db=temp_db, content="Benign content — no event triggers",
-            source_url="https://src.com/benign", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="Benign content — no event triggers",
+            source_url="https://src.com/benign",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
         assert result.is_new is True
 
@@ -415,13 +504,16 @@ class TestSourceRunsReconciliation:
 
     def test_duplicate_event_counting(self, temp_db):
         """A replayed event counts as duplicate_event, not events_created."""
-        from kassandra.evidence import store_evidence, store_event
+        from kassandra.evidence import store_event, store_evidence
 
         reg_id = _insert_registry(temp_db, "TestCo")
         ev_result = store_evidence(
-            db=temp_db, content="dedup test content",
-            source_url="https://src.com/dedup", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="dedup test content",
+            source_url="https://src.com/dedup",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
 
         # First: new event
@@ -448,7 +540,7 @@ class TestSourceRunsIntegration:
 
     def test_insert_source_run_with_reconciliation_fields(self, temp_db):
         """All reconciliation columns must be writable."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         temp_db.execute(
             """INSERT INTO source_runs
                (run_id, source_name,
@@ -458,10 +550,7 @@ class TestSourceRunsIntegration:
                 events_created, duplicate_events, errors,
                 started_at, completed_at)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            ("run-test-001", "test_source",
-             100, 90, 10, 80,
-             5, 2, 3, 1, 2,
-             now, now),
+            ("run-test-001", "test_source", 100, 90, 10, 80, 5, 2, 3, 1, 2, now, now),
         )
         temp_db.commit()
         row = temp_db.execute(
@@ -479,7 +568,7 @@ class TestSourceRunsIntegration:
 
     def test_multiple_runs_independent(self, temp_db):
         """Each run gets its own source_runs row."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         for i in range(3):
             temp_db.execute(
                 """INSERT INTO source_runs
@@ -494,7 +583,7 @@ class TestSourceRunsIntegration:
 
     def test_events_created_defaults_zero(self, temp_db):
         """events_created column defaults to 0 when not specified."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         temp_db.execute(
             """INSERT INTO source_runs
                (run_id, source_name, documents_discovered, documents_fetched,
@@ -532,9 +621,16 @@ class TestCollectorMetricsFlow:
         # Test that the contracts support the flow — actual collector
         # integration is tested in test_soak.py
         m = CollectionMetrics(
-            run_id="r1", source_name="companies_house",
-            discovered=50, fetched=50, new_evidence=3, duplicates=47,
-            candidates=3, unconfirmed=0, events_created=2, duplicate_events=1,
+            run_id="r1",
+            source_name="companies_house",
+            discovered=50,
+            fetched=50,
+            new_evidence=3,
+            duplicates=47,
+            candidates=3,
+            unconfirmed=0,
+            events_created=2,
+            duplicate_events=1,
             errors=0,
         )
         assert isinstance(m, CollectionMetrics)
@@ -545,8 +641,12 @@ class TestCollectorMetricsFlow:
 
     def test_collection_metrics_preserve_structured_error_classification(self):
         m = CollectionMetrics(
-            run_id="r1", source_name="test", errors=1,
-            api_errors=1, error_type="timeout", error_message="request timed out",
+            run_id="r1",
+            source_name="test",
+            errors=1,
+            api_errors=1,
+            error_type="timeout",
+            error_message="request timed out",
         )
         d = m.to_dict()
         assert d["api_errors"] == 1
@@ -557,8 +657,12 @@ class TestCollectorMetricsFlow:
         from kassandra.collector import _record_source_yields
 
         m = CollectionMetrics(
-            run_id="r-error", source_name="test", errors=1,
-            api_errors=1, error_type="timeout", error_message="request timed out",
+            run_id="r-error",
+            source_name="test",
+            errors=1,
+            api_errors=1,
+            error_type="timeout",
+            error_message="request timed out",
         )
         _record_source_yields(temp_db, "r-error", {"test": m}, {"test": 0.5})
         row = temp_db.execute(
@@ -576,7 +680,7 @@ class TestCollectorMetricsFlow:
         # The classifier 'accepted_events' counters track pattern hits that pass
         # negative-filtering. But store_event may still reject or dedup.
         # This test verifies the conceptual distinction.
-        from kassandra.evidence import store_evidence, store_event
+        from kassandra.evidence import store_event, store_evidence
 
         reg_id = _insert_registry(temp_db, "TestCo")
 
@@ -585,17 +689,23 @@ class TestCollectorMetricsFlow:
 
         # But after store_event: 1 inserted, 2 duplicates
         ev_result = store_evidence(
-            db=temp_db, content="event content",
-            source_url="https://src.com/ev", retrieval_time="2025-01-01T00:00:00Z",
-            extraction_method="test", parser_version="1.0",
+            db=temp_db,
+            content="event content",
+            source_url="https://src.com/ev",
+            retrieval_time="2025-01-01T00:00:00Z",
+            extraction_method="test",
+            parser_version="1.0",
         )
 
         inserted = 0
         duplicates = 0
         for i in range(3):
             r = store_event(
-                db=temp_db, evidence_id=ev_result.evidence_id, registry_id=reg_id,
-                event_type="profit_warning", severity="medium",
+                db=temp_db,
+                evidence_id=ev_result.evidence_id,
+                registry_id=reg_id,
+                event_type="profit_warning",
+                severity="medium",
             )
             if r.status == "inserted":
                 inserted += 1
@@ -604,12 +714,14 @@ class TestCollectorMetricsFlow:
 
         assert inserted == 1, "First event must be inserted"
         assert duplicates == 2, "Subsequent identical events must be duplicates"
-        assert inserted + duplicates == classifier_accepted, \
+        assert inserted + duplicates == classifier_accepted, (
             "Total store_event calls must equal classifier accepted"
+        )
         # But events_created (real DB delta) = 1, not 3
         actual_db_count = temp_db.execute(
             "SELECT COUNT(*) FROM events WHERE active=1 AND registry_id=?",
             (reg_id,),
         ).fetchone()[0]
-        assert actual_db_count == 1, \
+        assert actual_db_count == 1, (
             f"DB has {actual_db_count} active events, not {classifier_accepted}"
+        )

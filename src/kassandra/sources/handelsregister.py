@@ -28,17 +28,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from kassandra.config import get_config
 from kassandra.contracts import CollectionMetrics
-from kassandra.evidence import store_evidence, store_event
+from kassandra.evidence import store_event, store_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +67,14 @@ STATUS_EVENT_MAP: dict[str, tuple[str | None, str | None]] = {
 
 # Keywords that indicate adverse events in the status/document text
 ADVERSE_KEYWORDS = [
-    "insolvenz", "löschung", "loschung", "auflösung", "auflosung",
-    "liquidation", "abwicklung", "beendet",
+    "insolvenz",
+    "löschung",
+    "loschung",
+    "auflösung",
+    "auflosung",
+    "liquidation",
+    "abwicklung",
+    "beendet",
 ]
 
 # Rate limiter state (module-level to persist across calls)
@@ -104,9 +108,7 @@ class HandelsregisterClient:
     def __init__(self, cache_dir: Path | None = None) -> None:
         self._browser = None
         self._available: bool | None = None
-        self._cache_dir = cache_dir or (
-            Path(tempfile.gettempdir()) / "handelsregister_cache"
-        )
+        self._cache_dir = cache_dir or (Path(tempfile.gettempdir()) / "handelsregister_cache")
         self._cache_dir.mkdir(parents=True, exist_ok=True)
 
     @property
@@ -171,9 +173,7 @@ class HandelsregisterClient:
         mode_value = mode_map.get(match_mode, "3")
 
         # Cache check
-        cache_key = hashlib.sha256(
-            f"{company_name}|{match_mode}".encode()
-        ).hexdigest()[:16]
+        cache_key = hashlib.sha256(f"{company_name}|{match_mode}".encode()).hexdigest()[:16]
         cache_path = self._cache_dir / f"search_{cache_key}.json"
 
         if not force_refresh and cache_path.exists():
@@ -212,9 +212,7 @@ class HandelsregisterClient:
             logger.warning(f"Handelsregister search failed for '{company_name}': {e}")
             return []
 
-    def classify_results(
-        self, results: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def classify_results(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Classify Handelsregister search results into Kassandra events.
 
         Returns list of event dicts with: event_type, severity, confidence,
@@ -241,24 +239,26 @@ class HandelsregisterClient:
             if event_type is None:
                 continue
 
-            events.append({
-                "event_type": event_type,
-                "severity": severity,
-                "confidence": 0.85,  # Official register, high authority
-                "description": (
-                    f"Handelsregister status for {result.get('name', '?')}: "
-                    f"{result.get('status', '?')} "
-                    f"(Register: {result.get('register_num', '?')}, "
-                    f"Court: {result.get('court', '?')})"
-                ),
-                "source_detail": {
-                    "register_num": result.get("register_num"),
-                    "court": result.get("court"),
-                    "state": result.get("state"),
-                    "status": result.get("status"),
-                    "name": result.get("name"),
-                },
-            })
+            events.append(
+                {
+                    "event_type": event_type,
+                    "severity": severity,
+                    "confidence": 0.85,  # Official register, high authority
+                    "description": (
+                        f"Handelsregister status for {result.get('name', '?')}: "
+                        f"{result.get('status', '?')} "
+                        f"(Register: {result.get('register_num', '?')}, "
+                        f"Court: {result.get('court', '?')})"
+                    ),
+                    "source_detail": {
+                        "register_num": result.get("register_num"),
+                        "court": result.get("court"),
+                        "state": result.get("state"),
+                        "status": result.get("status"),
+                        "name": result.get("name"),
+                    },
+                }
+            )
 
         return events
 
@@ -277,7 +277,8 @@ class HandelsregisterClient:
         for full reconciliation-safe CollectionMetrics.
         """
         metrics = self.collect_for_company_metrics(
-            db=db, registry_id=registry_id,
+            db=db,
+            registry_id=registry_id,
             company_name=company_name,
         )
         return metrics.events_created
@@ -306,14 +307,19 @@ class HandelsregisterClient:
 
         if not results:
             return CollectionMetrics(
-                run_id=run_id, source_name="handelsregister_de",
-                discovered=0, fetched=0,
-                new_evidence=0, duplicates=0,
-                candidates=0, events_created=0, duplicate_events=0,
+                run_id=run_id,
+                source_name="handelsregister_de",
+                discovered=0,
+                fetched=0,
+                new_evidence=0,
+                duplicates=0,
+                candidates=0,
+                events_created=0,
+                duplicate_events=0,
                 errors=0,
             )
 
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         for result in results:
             content = json.dumps(result, ensure_ascii=False, default=str)
@@ -321,8 +327,7 @@ class HandelsregisterClient:
                 db=db,
                 content=content,
                 source_url=(
-                    f"https://www.handelsregister.de/erweiterteSuche?"
-                    f"schlagwoerter={company_name}"
+                    f"https://www.handelsregister.de/erweiterteSuche?schlagwoerter={company_name}"
                 ),
                 retrieval_time=now,
                 extraction_method="handelsregister_de",
@@ -361,12 +366,15 @@ class HandelsregisterClient:
                     duplicate_events += 1
 
         return CollectionMetrics(
-            run_id=run_id, source_name="handelsregister_de",
+            run_id=run_id,
+            source_name="handelsregister_de",
             discovered=discovered,
             fetched=new_evidence + duplicates,
-            new_evidence=new_evidence, duplicates=duplicates,
+            new_evidence=new_evidence,
+            duplicates=duplicates,
             candidates=candidates,
-            events_created=events_created, duplicate_events=duplicate_events,
+            events_created=events_created,
+            duplicate_events=duplicate_events,
             errors=0,
         )
 
@@ -411,9 +419,7 @@ def _parse_search_results(html: str) -> list[dict[str, Any]]:
             "history": _extract_history(cells),
         }
         # Canonicalized status for matching
-        result["statusCurrent"] = (
-            result["status"].upper().replace(" ", "_")
-        )
+        result["statusCurrent"] = result["status"].upper().replace(" ", "_")
         results.append(result)
 
     return results
