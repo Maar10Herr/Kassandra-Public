@@ -70,7 +70,7 @@ class WebMonitor:
     """Discover and monitor company websites and feeds."""
 
     def __init__(
-        self, user_agent: str = "Kassandra/0.1 (+https://github.com/Maar10Herr/Kassandra-Public)"
+        self, user_agent: str = "Kassandra/0.2 (+https://github.com/Maar10Herr/Kassandra-Public)"
     ):
         self._client = httpx.Client(
             timeout=30,
