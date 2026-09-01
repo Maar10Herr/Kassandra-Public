@@ -384,7 +384,7 @@ class BodaccClient:
             headers={
                 "User-Agent": (
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "Kassandra/0.1 (+https://github.com/user/kassandra)"
+                    "Kassandra/0.2 (+https://github.com/Maar10Herr/Kassandra-Public)"
                 ),
                 "Accept": "application/json",
             },
