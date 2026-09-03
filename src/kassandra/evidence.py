@@ -4,9 +4,13 @@ Every piece of evidence is stored on disk with a content-hash filename,
 and metadata is recorded in SQLite. Content is never modified after storage.
 """
 
+import errno
 import hashlib
 import logging
+import os
 import sqlite3
+import stat
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,6 +18,70 @@ from kassandra.config import get_config
 from kassandra.contracts import EventResult, EvidenceResult
 
 logger = logging.getLogger(__name__)
+
+
+def _verify_existing_content_object(
+    path: Path,
+    content_hash: str,
+    algorithm: str,
+) -> None:
+    """Verify an existing object without following a symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        if error.errno == errno.ELOOP:
+            raise ValueError("content object path is not a regular file") from error
+        raise
+    try:
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = -1
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValueError("content object path is not a regular file")
+            digest = hashlib.new(algorithm)
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if digest.hexdigest() != content_hash:
+        raise ValueError("existing content object hash does not match its name")
+
+
+def _ensure_content_object(
+    path: Path,
+    content: bytes,
+    content_hash: str,
+    algorithm: str,
+) -> None:
+    """Publish one complete immutable object, rejecting collisions and links."""
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+    )
+    temporary_path = Path(temporary_name)
+    try:
+        try:
+            with os.fdopen(descriptor, "wb") as handle:
+                descriptor = -1
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+
+        try:
+            # Hard-linking publishes only after temp-file write and close.
+            os.link(temporary_path, path, follow_symlinks=False)
+        except FileExistsError:
+            _verify_existing_content_object(path, content_hash, algorithm)
+            return
+    finally:
+        try:
+            temporary_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def store_evidence(
@@ -66,9 +134,7 @@ def store_evidence(
     evidence_dir.mkdir(parents=True, exist_ok=True)
     file_path = evidence_dir / content_hash
 
-    # Don't overwrite existing files
-    if not file_path.exists():
-        file_path.write_bytes(content_bytes)
+    _ensure_content_object(file_path, content_bytes, content_hash, algo)
 
     # Record metadata
     now = datetime.now(UTC).isoformat()
