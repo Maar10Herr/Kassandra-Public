@@ -21,7 +21,7 @@ dependencies = [
     "click>=8.0.0",
     "rich>=13.0.0",
     "pyyaml>=6.0",
-    "itsdangerous>=2.0.0",
+    "itsdangerous>=2.2.0",
     "python-dotenv>=1.0.0",
     "pymupdf>=1.27.2.3",
 ]
