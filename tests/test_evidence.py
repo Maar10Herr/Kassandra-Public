@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from kassandra.db import _connect, migrate
 import kassandra.evidence as evidence
+from kassandra.db import _connect, migrate
 from kassandra.evidence import _ensure_content_object, store_event, store_evidence
 
 
