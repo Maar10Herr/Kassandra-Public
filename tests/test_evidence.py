@@ -1,12 +1,16 @@
 """Tests for evidence storage and event creation."""
 
+import hashlib
+import stat
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from kassandra.db import _connect, migrate
-from kassandra.evidence import store_event, store_evidence
+import kassandra.evidence as evidence
+from kassandra.evidence import _ensure_content_object, store_event, store_evidence
 
 
 @pytest.fixture
@@ -25,6 +29,60 @@ def temp_db():
 
 
 class TestEvidence:
+    def test_content_object_rejects_symlink(self, tmp_path):
+        content = b"new content"
+        target = tmp_path / "target"
+        target.write_bytes(b"keep this content")
+        object_path = tmp_path / hashlib.sha256(content).hexdigest()
+        object_path.symlink_to(target)
+
+        with pytest.raises(ValueError, match="regular file"):
+            _ensure_content_object(object_path, content, object_path.name, "sha256")
+
+        assert target.read_bytes() == b"keep this content"
+        assert not list(tmp_path.glob(f".{object_path.name}.*"))
+
+    def test_content_object_rejects_hash_collision(self, tmp_path):
+        content = b"expected content"
+        object_path = tmp_path / hashlib.sha256(content).hexdigest()
+        object_path.write_bytes(b"wrong content")
+
+        with pytest.raises(ValueError, match="does not match"):
+            _ensure_content_object(object_path, content, object_path.name, "sha256")
+
+        assert object_path.read_bytes() == b"wrong content"
+        assert not list(tmp_path.glob(f".{object_path.name}.*"))
+
+    def test_content_object_cleans_temporary_file_after_write_failure(
+        self, tmp_path, monkeypatch
+    ):
+        content = b"content whose publication fails"
+        object_path = tmp_path / hashlib.sha256(content).hexdigest()
+
+        def fail_fsync(_descriptor):
+            raise OSError("simulated fsync failure")
+
+        monkeypatch.setattr(evidence.os, "fsync", fail_fsync)
+        with pytest.raises(OSError, match="simulated fsync failure"):
+            _ensure_content_object(object_path, content, object_path.name, "sha256")
+
+        assert not object_path.exists()
+        assert not list(tmp_path.glob(f".{object_path.name}.*"))
+
+    def test_content_object_concurrent_publication_is_complete(self, tmp_path):
+        content = b"content published by concurrent writers" * 1000
+        object_path = tmp_path / hashlib.sha256(content).hexdigest()
+
+        def publish(_index):
+            _ensure_content_object(object_path, content, object_path.name, "sha256")
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            list(executor.map(publish, range(16)))
+
+        assert object_path.read_bytes() == content
+        assert stat.S_IMODE(object_path.stat().st_mode) == 0o600
+        assert not list(tmp_path.glob(f".{object_path.name}.*"))
+
     def test_store_and_retrieve(self, temp_db):
         """Store evidence and retrieve it."""
         result = store_evidence(
