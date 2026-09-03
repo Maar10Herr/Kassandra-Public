@@ -53,9 +53,7 @@ class TestEvidence:
         assert object_path.read_bytes() == b"wrong content"
         assert not list(tmp_path.glob(f".{object_path.name}.*"))
 
-    def test_content_object_cleans_temporary_file_after_write_failure(
-        self, tmp_path, monkeypatch
-    ):
+    def test_content_object_cleans_temporary_file_after_write_failure(self, tmp_path, monkeypatch):
         content = b"content whose publication fails"
         object_path = tmp_path / hashlib.sha256(content).hexdigest()
 
