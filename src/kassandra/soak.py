@@ -757,8 +757,9 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
     # Tracked across cycles by the soak state; skip on first cycle.
 
     # 7. Secret leakage scan — check repo for API keys
-    secret_findings = _scan_for_secrets()
-    findings.extend(secret_findings)
+    # The scanner returns path-only diagnostics, never matching source contents.
+    scan_findings = _scan_for_secrets()
+    findings.extend(scan_findings)
 
     # 8. NULL evidence_id on edges (should be impossible with NOT NULL)
     null_evidence = db.execute("SELECT COUNT(*) FROM edges WHERE evidence_id IS NULL").fetchone()[0]
@@ -848,14 +849,15 @@ def _scan_for_secrets() -> list[dict[str, Any]]:
     import subprocess
 
     try:
-        # Search for common secret patterns but exclude URLs and XML namespaces
+        # Request filenames only: matched contents must never enter reports.
         result = subprocess.run(
             [
                 "git",
                 "-C",
                 str(Path(__file__).resolve().parent.parent.parent),
                 "grep",
-                "-n",
+                "-l",
+                "-z",
                 "-I",
                 "-E",
                 r"(sk-[a-zA-Z0-9]{20,}|api_key\s*=\s*['\"][A-Za-z0-9_\-]{12,}['\"]"
@@ -867,37 +869,39 @@ def _scan_for_secrets() -> list[dict[str, Any]]:
             text=True,
             timeout=10,
         )
-        for line in result.stdout.splitlines():
-            if not line:
+        if result.returncode not in (0, 1):
+            raise RuntimeError("secret scan failed")
+        for filename in result.stdout.split("\0"):
+            if not filename:
                 continue
-            # Skip false positives: URLs, XML namespaces, test fixtures, example files
+            # Exclusions apply to paths, never to potentially sensitive contents.
             if any(
-                skip in line
+                skip in filename
                 for skip in [
                     ".env.example",
                     "test_",
                     "fixture",
-                    "http://",
-                    "https://",
-                    "xmlns",
                     "schema/",
-                    "example.com",
                 ]
             ):
                 continue
-            # Skip lines that are clearly URLs or XML
-            path_part = line.split(":", 1)[0] if ":" in line else ""
-            if any(path_part.endswith(ext) for ext in [".xml"]):
+            if filename.endswith(".xml"):
                 continue
             findings.append(
                 {
                     "severity": "P0",
                     "check": "secret_leakage",
-                    "detail": f"Potential secret in repo: {line[:120]}",
+                    "detail": f"Potential secret in tracked file: {filename}",
                 }
             )
     except Exception:
-        pass
+        findings.append(
+            {
+                "severity": "P0",
+                "check": "secret_scan_failed",
+                "detail": "Secret scanning did not complete; inspect the scanner locally.",
+            }
+        )
 
     return findings
 
