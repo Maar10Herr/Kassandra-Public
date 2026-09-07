@@ -21,11 +21,11 @@ from unittest.mock import patch
 def test_secret_scan_reports_only_filenames():
     from subprocess import CompletedProcess
 
-    from kassandra.soak import _scan_for_secrets
+    from kassandra.soak import _repository_scan_findings
 
     result = CompletedProcess([], 0, "src/settings.py\0tests/test_config.py\0", "")
     with patch("subprocess.run", return_value=result) as run:
-        findings = _scan_for_secrets()
+        findings = _repository_scan_findings()
     command = run.call_args.args[0]
     assert "-l" in command and "-z" in command and "-n" not in command
     assert findings == [
@@ -40,11 +40,11 @@ def test_secret_scan_reports_only_filenames():
 def test_secret_scan_failure_is_reported_without_process_output():
     from subprocess import CompletedProcess
 
-    from kassandra.soak import _scan_for_secrets
+    from kassandra.soak import _repository_scan_findings
 
     result = CompletedProcess([], 2, "sensitive process output", "sensitive error")
     with patch("subprocess.run", return_value=result):
-        findings = _scan_for_secrets()
+        findings = _repository_scan_findings()
     assert findings[0]["check"] == "secret_scan_failed"
     assert "sensitive" not in str(findings)
 
