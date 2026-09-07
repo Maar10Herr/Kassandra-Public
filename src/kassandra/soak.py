@@ -758,7 +758,7 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
 
     # 7. Secret leakage scan — check repo for API keys
     # The scanner returns path-only diagnostics, never matching source contents.
-    scan_findings = _scan_for_secrets()
+    scan_findings = _repository_scan_findings()
     findings.extend(scan_findings)
 
     # 8. NULL evidence_id on edges (should be impossible with NOT NULL)
@@ -843,7 +843,7 @@ def run_consistency_checks(db: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
-def _scan_for_secrets() -> list[dict[str, Any]]:
+def _repository_scan_findings() -> list[dict[str, Any]]:
     """Check repo for API keys and secrets in tracked files."""
     findings = []
     import subprocess
