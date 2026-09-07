@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use Kassandra in research, cite the versioned software release."
 title: "Kassandra: Provenance-Aware Corporate Monitoring"
 type: software
-version: 0.2.0
-date-released: 2026-08-19
+version: 0.2.1
+date-released: 2026-09-07
 authors:
   - family-names: Herrmann
     given-names: Maarten Linus
