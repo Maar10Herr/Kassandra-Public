@@ -23,7 +23,7 @@ dependencies = [
     "pyyaml>=6.0",
     "itsdangerous>=2.2.0",
     "python-dotenv>=1.0.0",
-    "pymupdf>=1.27.2.3",
+    "pymupdf>=1.28.2",
 ]
 
 [project.optional-dependencies]
